@@ -2,13 +2,8 @@ package com.chocohead.merger.menu;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.DoubleConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -35,21 +30,98 @@ public class MergedJaringMenu extends Menu {
 		getItems().add(item);
 	}
 
+	private static class ClassSystem {
+		public final Set<SystemComponent> classes = Util.newIdentityHashSet();
+
+		public static ClassSystem create(SystemComponent first) {
+			ClassSystem out = new ClassSystem();
+			out.classes.add(first);
+			return out;
+		}
+
+		public Set<ClassInstance> involvedClasses() {
+			return classes.stream().map(SystemComponent::involvedClasses).flatMap(Set::stream).collect(Collectors.toCollection(Util::newIdentityHashSet));
+		}
+
+		public Set<ClassInstance> sniffAdditionalNests() {
+			return classes.stream().map(component -> {
+				Set<ClassInstance> extra = Util.newIdentityHashSet();
+				Set<ClassInstance> known = component.accessedBy();
+
+				for (ClassInstance cls : known) {
+					List<ClassInstance> parents = new ArrayList<>();
+
+					ClassInstance parent = cls;
+					while ((parent = parent.getSuperClass()) != null) {
+						if (!known.contains(parent)) {
+							parents.add(parent);
+						} else {
+							extra.addAll(parents);
+							break;
+						}
+					}
+				}
+
+				return extra;
+			}).flatMap(Set::stream).collect(Collectors.toCollection(Util::newIdentityHashSet));
+		}
+
+		public boolean isSimple() {
+			return classes.stream().allMatch(SystemComponent::isInner);
+		}
+	}
+
+	private static class SystemComponent {
+		public final ClassInstance root;
+		public final Set<FieldInstance> locals = Util.newIdentityHashSet();
+		public final Set<MethodInstance> callsIn = Util.newIdentityHashSet();
+
+		public SystemComponent(ClassInstance root) {
+			this.root = root;
+		}
+
+		public boolean isInner() {
+			return !locals.isEmpty();
+		}
+
+		public boolean isAnonymous() {
+			return isInner() && callsIn.isEmpty();
+		}
+
+		public Set<ClassInstance> localIn() {
+			return locals.stream().map(FieldInstance::getType).collect(Collectors.toCollection(Util::newIdentityHashSet));
+		}
+
+		public Set<ClassInstance> accessedBy() {
+			return callsIn.stream().map(MethodInstance::getCls).collect(Collectors.toCollection(Util::newIdentityHashSet));
+		}
+
+		public Set<ClassInstance> involvedClasses() {
+			Set<ClassInstance> out = Util.newIdentityHashSet();
+			out.add(root);
+			out.addAll(localIn());
+			out.addAll(accessedBy());
+			return out;
+		}
+	}
+
 	private void findInnerClasses(Gui gui, DoubleConsumer progress) {
 		List<ClassInstance> classes = Stream.concat(gui.getEnv().getClassesA().stream(), gui.getEnv().getClassesB().stream()).filter(cls -> cls.getUri() != null && cls.isNameObfuscated()).collect(Collectors.toList());
-		Set<ClassInstance> localClasses = Collections.newSetFromMap(new ConcurrentHashMap<>());
-		Map<ClassInstance, Set<ClassInstance>> innerClasses = new ConcurrentHashMap<>();
+		List<ClassSystem> systems = new ArrayList<>();
 
 		UnsharedMatcher.runParallel(classes, cls -> {
 			if ((cls.getAccess() & Opcodes.ACC_SYNTHETIC) != 0) return; //Synthetic enum switch class
 
-			if (!cls.isEnum()) {//Don't go looking for synthetic fields in an enum as they're always static but will still have one ($VALUES)
+			boolean isNotable = false;
+			SystemComponent component = new SystemComponent(cls);
 
+			if (!cls.isEnum()) {//Don't go looking for synthetic fields in an enum as they're always static but will still have one ($VALUES)
 				for (FieldInstance field : cls.getFields()) {
 					if (field.isReal() && (field.getAccess() & Opcodes.ACC_SYNTHETIC) != 0) {
 						assert Arrays.stream(cls.getMethods()).filter(method -> "<init>".equals(method.getName())).count() == 1: "Multiple constructors found in " + cls.getName();
-						localClasses.add(cls);
-						return; //If it has a synthetic field cls is probably a local class of some kind
+
+						isNotable = true;
+						component.locals.add(field);
 					}
 				}
 			}
@@ -58,85 +130,57 @@ public class MergedJaringMenu extends Menu {
 				if (method.isReal() && (method.getAccess() & Opcodes.ACC_SYNTHETIC) != 0) {
 					Set<MethodInstance> refsIn = method.getRefsIn();
 
-					switch (refsIn.size()) {
+					if (!refsIn.isEmpty()) {//Will appear unused when method is a bridge override of something else
+						System.out.println("Found likely inner class from " + cls.getName() + '#' + method.getName() + method.getDesc() + " (" + (gui.getEnv().getClassesA().contains(cls) ? "A" : "B") + " side)");
+
+						isNotable = true; //TODO: Grab the sole constructor and flag the difference between captured locals and implicit parent type(s)
+						component.callsIn.addAll(refsIn);
+					}
+				}
+			}
+
+			if (isNotable) {
+				synchronized (systems) {
+					List<ClassSystem> matchedSystems = systems.stream().filter(system -> system.involvedClasses().stream().anyMatch(clazz -> component.involvedClasses().contains(clazz))).collect(Collectors.toList());
+					switch (matchedSystems.size()) {
 					case 0:
-						//Appears unused, probably called as a bridge override of something else
+						systems.add(ClassSystem.create(component));
 						break;
 
 					case 1:
-						MethodInstance refIn = refsIn.iterator().next();
-						System.out.println("Found likely inner class from " + refIn + " (calling " + method + ')');
-						innerClasses.computeIfAbsent(cls, k -> Collections.newSetFromMap(new ConcurrentHashMap<>())).add(refIn.getCls());
+						matchedSystems.get(0).classes.add(component);
 						break;
 
 					default:
-						//Lots of uses for a synthetic, strange
-						System.out.println("Multiple references found for " + cls.getName() + '#' + method.getName() + method.getDesc() + " (" + (gui.getEnv().getClassesA().contains(cls) ? "server" : "client") + " side)");
-						Set<ClassInstance> pool = innerClasses.computeIfAbsent(cls, k -> Collections.newSetFromMap(new ConcurrentHashMap<>()));
-						refsIn.stream().map(MethodInstance::getCls).distinct().forEach(pool::add);
+						ClassSystem merge = matchedSystems.remove(0);
+						merge.classes.add(component);
+
+						systems.removeAll(matchedSystems);
+						for (ClassSystem system : matchedSystems) {
+							merge.classes.addAll(system.classes);
+						}
+
+						break;
 					}
 				}
 			}
 		}, progress::accept);
 
-		System.out.println();/*
-		System.out.println("Found " + localClasses.size() + " local classes and " + innerClasses.size() + " (likely) inner classes, " + localClasses.stream().filter(cls -> innerClasses.stream().anyMatch(entry -> entry.getValue() == cls)).count() + " common to both");
-		System.out.println("Common:");
-		localClasses.stream().filter(cls -> innerClasses.values().stream().flatMap(Set::stream).anyMatch(entry -> entry.getValue() == cls)).filter(gui.getEnv().getClassesA()::contains).sorted(Comparator.comparing(ClassInstance::getName)).forEach(cls -> System.out.println(cls.getName()));
-		System.out.println("Local classes:");
-		localClasses.stream().filter(cls -> innerClasses.stream().noneMatch(entry -> entry.getValue() == cls)).filter(gui.getEnv().getClassesA()::contains).sorted(Comparator.comparing(ClassInstance::getName)).forEach(cls -> System.out.println(cls.getName()));
-		System.out.println("Inner classes:");
-		innerClasses.stream().filter(entry -> !localClasses.contains(entry.getValue())).filter(entry -> gui.getEnv().getClassesA().contains(entry.getValue())).sorted(Comparator.comparing(Entry::getValue, Comparator.comparing(ClassInstance::getName))).forEach(entry -> System.out.println(entry.getKey().getName() + " => " + entry.getValue().getName()));*/
+		int i = 0;
+		for (ClassSystem system : systems) {
+			System.out.printf("%n%sSystem %d [%d classes]:%n", system.isSimple() ? "Simple " : "", i++, system.classes.size());
 
-		Map<ClassInstance, Set<ClassInstance>> seenInners = new IdentityHashMap<>();
-		on: for (Entry<ClassInstance, Set<ClassInstance>> entry : innerClasses.entrySet()) {
-			if (seenInners.containsKey(entry.getKey())) {
-				seenInners.get(entry.getKey()).addAll(entry.getValue());
-				seenInners.get(entry.getKey()).remove(entry.getKey()); //A class won't contain itself
-			} else {
-				for (ClassInstance cls : entry.getValue()) {
-					if (seenInners.containsKey(cls)) {
-						Set<ClassInstance> pool = seenInners.get(cls);
-
-						pool.addAll(entry.getValue());
-						pool.add(entry.getKey());
-						pool.remove(cls);
-
-						continue on;
-					}
-				}
-
-				seenInners.put(entry.getKey(), Util.newIdentityHashSet(entry.getValue()));
-			}
-		}
-
-		System.out.println("Found inner class collections:");
-		for (Entry<ClassInstance, Set<ClassInstance>> entry : seenInners.entrySet()) {
-			System.out.print(Stream.concat(Stream.of(entry.getKey()), entry.getValue().stream()).map(cls -> localClasses.contains(cls) ? '(' + cls.getName() + ')' : cls.getName()).collect(Collectors.joining(", ", "\t[", "]")));
-
-			Set<ClassInstance> extra = Util.newIdentityHashSet();
-			for (ClassInstance cls : entry.getValue()) {
-				List<ClassInstance> parents = new ArrayList<>();
-
-				ClassInstance parent = cls;
-				while ((parent = parent.getSuperClass()) != null) {
-					if (!entry.getValue().contains(parent)) {
-						parents.add(parent);
-					} else {
-						extra.addAll(parents);
-						break;
-					}
-				}
+			for (SystemComponent component : system.classes) {
+				System.out.printf("\t%s%s (%s):%n\t\tCaptured classes: %s%n\t\tAccessed by: %s%n", component.isInner() ? component.isAnonymous() ? "Anonymous " : "Local " : component.callsIn.isEmpty() ? "Nested(?) " : "",
+						component.root, gui.getEnv().getClassesA().contains(component.root) ? "A side" : "B side",
+								component.localIn().stream().map(ClassInstance::getName).sorted().collect(Collectors.joining(", ", "[", "]")),
+								component.accessedBy().stream().map(ClassInstance::getName).sorted().collect(Collectors.joining(", ", "[", "]")));
 			}
 
+			Set<ClassInstance> extra = system.sniffAdditionalNests();
 			if (!extra.isEmpty()) {
-				System.out.println(", likely with " + extra);
-			} else {
-				System.out.println();
+				System.out.printf("\tProbably with: %s%n", extra.stream().map(ClassInstance::getName).sorted().collect(Collectors.joining(", ", "[", "]")));
 			}
 		}
-		System.out.println();
-		System.out.println("Local classes:");
-		localClasses.stream().map(ClassInstance::getName).sorted().forEach(System.out::println);
 	}
 }
