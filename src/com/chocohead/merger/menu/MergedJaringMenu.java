@@ -18,13 +18,13 @@ import javafx.scene.control.SeparatorMenuItem;
 
 import org.objectweb.asm.Opcodes;
 
+import matcher.Matcher;
 import matcher.Util;
 import matcher.gui.Gui;
 import matcher.type.ClassInstance;
 import matcher.type.FieldInstance;
 import matcher.type.MethodInstance;
 
-import com.chocohead.merger.UnsharedMatcher;
 import com.chocohead.merger.pane.ExportJarPane;
 
 public class MergedJaringMenu extends Menu {
@@ -153,7 +153,7 @@ public class MergedJaringMenu extends Menu {
 		List<ClassInstance> classes = Stream.concat(gui.getEnv().getClassesA().stream(), gui.getEnv().getClassesB().stream()).filter(cls -> cls.getUri() != null && cls.isNameObfuscated()).collect(Collectors.toList());
 		List<ClassSystem> systems = new ArrayList<>();
 
-		UnsharedMatcher.runParallel(classes, cls -> {
+		Matcher.runInParallel(classes, cls -> {
 			if ((cls.getAccess() & Opcodes.ACC_SYNTHETIC) != 0) return; //Synthetic enum switch class
 
 			boolean isNotable = false;

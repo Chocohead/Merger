@@ -19,6 +19,7 @@ import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 
+import matcher.Matcher;
 import matcher.Util;
 import matcher.classifier.ClassifierUtil;
 import matcher.gui.Gui;
@@ -45,7 +46,7 @@ public enum MergeStep {
 					.collect(Collectors.toList());
 			Queue<ClassInstance> mismatches = new ConcurrentLinkedQueue<>();
 
-			UnsharedMatcher.runParallel(classes, cls -> {
+			Matcher.runInParallel(classes, cls -> {
 				//Look to see if partially matched classes are mismatched from methods with identical signatures having different bytecode
 				ClassInstance match = cls.getMatch();
 				assert match != null;
@@ -77,7 +78,7 @@ public enum MergeStep {
 			Map<MethodInstance, MethodInstance> methodMatches = new ConcurrentHashMap<>(classes.size());
 			Map<FieldInstance, FieldInstance> fieldMatches = new ConcurrentHashMap<>(classes.size());
 
-			UnsharedMatcher.runParallel(classes, cls -> {
+			Matcher.runInParallel(classes, cls -> {
 				ClassEnvironment env = gui.getEnv();
 
 				for (MethodInstance method : cls.getMethods()) {
@@ -261,9 +262,9 @@ public enum MergeStep {
 				}
 			}, progress::accept);
 
-			UnsharedMatcher.sanitise(matches);
-			UnsharedMatcher.sanitise(methodMatches);
-			UnsharedMatcher.sanitise(fieldMatches);
+			Matcher.sanitizeMatches(matches);
+			Matcher.sanitizeMatches(methodMatches);
+			Matcher.sanitizeMatches(fieldMatches);
 
 			for (Map.Entry<ClassInstance, ClassInstance> entry : matches.entrySet()) {
 				gui.getMatcher().match(entry.getKey(), entry.getValue());
@@ -284,7 +285,7 @@ public enum MergeStep {
 					.collect(Collectors.toList());
 			Queue<MethodInstance> mismatches = new ConcurrentLinkedQueue<>();
 
-			UnsharedMatcher.runParallel(classes, cls -> {
+			Matcher.runInParallel(classes, cls -> {
 				for (MethodInstance method : cls.getMethods()) {
 					//Make sure we've only matching methods that really exist
 					if (!method.isReal() || !method.hasMatch()) continue;
@@ -323,13 +324,13 @@ public enum MergeStep {
 			Map<ClassInstance, ClassInstance> typeMatches = new ConcurrentHashMap<>();
 			Map<MethodInstance, MethodInstance> matches = new ConcurrentHashMap<>();
 
-			UnsharedMatcher.runParallel(classes, cls -> {
+			Matcher.runInParallel(classes, cls -> {
 				run(cls, typeMatches, matches);
 				//Map<Integer, List<MethodInstance>> methodPool = Arrays.stream(matchCls.getMethods()).collect(Collectors.groupingBy(method -> method.getArgs().length));
 			}, progress::accept);
 
-			UnsharedMatcher.sanitise(typeMatches);
-			UnsharedMatcher.sanitise(matches);
+			Matcher.sanitizeMatches(typeMatches);
+			Matcher.sanitizeMatches(matches);
 
 			if (!typeMatches.isEmpty()) {
 				typeMatches.forEach(gui.getMatcher()::match);
@@ -453,7 +454,7 @@ public enum MergeStep {
 					.collect(Collectors.toList());
 			Map<ClassInstance, ClassInstance> matches = new ConcurrentHashMap<>();
 
-			UnsharedMatcher.runParallel(classes, cls -> {
+			Matcher.runInParallel(classes, cls -> {
 				for (MethodInstance method : cls.getMethods()) {
 					if (!method.hasMatch()) continue;
 
@@ -481,7 +482,7 @@ public enum MergeStep {
 				}
 			}, progress::accept);
 
-			UnsharedMatcher.sanitise(matches);
+			Matcher.sanitizeMatches(matches);
 
 			if (!matches.isEmpty()) {
 				matches.forEach(gui.getMatcher()::match);
