@@ -30,7 +30,6 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -41,27 +40,94 @@ import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
-import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 
+import matcher.NameType;
+import matcher.type.ClassEnv;
+import matcher.type.ClassInstance;
+
 public class JarMerger implements AutoCloseable {
-	public class Entry {
+	public static abstract class Entry {
 		public final Path path;
 		public final BasicFileAttributes metadata;
-		public final byte[] data;
 
-		public Entry(Path path, BasicFileAttributes metadata, byte[] data) {
+		public Entry(Path path, BasicFileAttributes metadata) {
 			this.path = path;
 			this.metadata = metadata;
-			this.data = data;
+		}
+
+		public abstract void writeTo(Path path) throws IOException;
+	}
+
+	public static class CloningEntry extends Entry {
+		public CloningEntry(Path path, BasicFileAttributes metadata) {
+			super(path, metadata);
+		}
+
+		@Override
+		public void writeTo(Path path) throws IOException {
+			Files.copy(this.path, path);
+		}
+	}
+
+	public static class FlatteningEntry extends Entry {
+		public final byte[] contents;
+
+		public FlatteningEntry(Path path, BasicFileAttributes metadata, byte[] contents) {
+			super(path, metadata);
+
+			this.contents = contents;
+		}
+
+		@Override
+		public void writeTo(Path path) throws IOException {
+			Files.write(path, contents, StandardOpenOption.CREATE_NEW);
+		}
+	}
+
+	public static class ClassEntry extends Entry {
+		private final Consumer<ClassVisitor> contentsFinaliser;
+		private final ClassWriter writer = new ClassWriter(0);
+		private ClassVisitor visitor = writer;
+
+		public static ClassEntry create(Path path, BasicFileAttributes metadata, ClassEnv environment) {
+			assert path.toString().endsWith(".class");
+
+			String name = path.toString().substring(1, path.toString().length() - 6);
+			ClassInstance cls = environment.getClsByName(name, NameType.PLAIN);
+
+			return new ClassEntry(path, metadata, visitor -> cls.accept(visitor, NameType.UID_PLAIN));
+		}
+
+		public ClassEntry(Path path, BasicFileAttributes metadata, Consumer<ClassVisitor> contentsFinaliser) {
+			super(path, metadata);
+
+			this.contentsFinaliser = contentsFinaliser;
+		}
+
+		public void accept(UnaryOperator<ClassVisitor> visitorTransformer) {
+			visitor = visitorTransformer.apply(visitor);
+		}
+
+		public void accept(ClassVisitor visitor) {
+			contentsFinaliser.accept(visitor);
+		}
+
+		@Override
+		public void writeTo(Path path) throws IOException {
+			contentsFinaliser.accept(visitor);
+			Files.write(path, writer.toByteArray(), StandardOpenOption.CREATE_NEW);
 		}
 	}
 
 	private static final ClassMerger CLASS_MERGER = new ClassMerger();
+	private final ClassEnv environment;
 	private final /*StitchUtil.*/FileSystem/*Delegate inputClientFs, inputServerFs,*/ outputFs;
 	private final Path inputClient, inputServer;
 	private final Map<String, Entry> entriesClient, entriesServer;
@@ -86,7 +152,7 @@ public class JarMerger implements AutoCloseable {
 	}
 	//Up to here
 
-	public JarMerger(/*File*/Path inputClient, /*File*/Path inputServer, /*File*/Path output) throws IOException {
+	public JarMerger(ClassEnv environment, /*File*/Path inputClient, /*File*/Path inputServer, /*File*/Path output) throws IOException {
 		/*if (output.exists()) {
 			if (!output.delete()) {
 				throw new IOException("Could not delete " + output.getName());
@@ -94,6 +160,7 @@ public class JarMerger implements AutoCloseable {
 		}*/
 		assert Files.notExists(output); //Let's just presume the output path is clear
 
+		this.environment = environment;
 		this.inputClient = /*(inputClientFs = StitchUtil.getJarFileSystem(inputClient, false)).get().getPath("/")*/inputClient;
 		this.inputServer = /*(inputServerFs = StitchUtil.getJarFileSystem(inputServer, false)).get().getPath("/")*/inputServer;
 		outputFs = /*StitchUtil.*/getJarFileSystem(output, true);
@@ -129,7 +196,7 @@ public class JarMerger implements AutoCloseable {
 
 					if (!path.getFileName().toString().endsWith(".class")) {
 						if (path.toString().equals("/META-INF/MANIFEST.MF")) {
-							map.put("META-INF/MANIFEST.MF", new Entry(path, attr, "Manifest-Version: 1.0\nMain-Class: net.minecraft.client.Main\n".getBytes(StandardCharsets.UTF_8)));
+							map.put("META-INF/MANIFEST.MF", new FlatteningEntry(path, attr, "Manifest-Version: 1.0\nMain-Class: net.minecraft.client.Main\n".getBytes(StandardCharsets.UTF_8)));
 						} else {
 							if (path.toString().startsWith("/META-INF/")) {
 								if (path.toString().endsWith(".SF") || path.toString().endsWith(".RSA")) {
@@ -137,14 +204,14 @@ public class JarMerger implements AutoCloseable {
 								}
 							}
 
-							map.put(path.toString().substring(1), new Entry(path, attr, null));
+							map.put(path.toString().substring(1), new CloningEntry(path, attr));
 						}
 
 						return FileVisitResult.CONTINUE;
 					}
 
-					byte[] output = Files.readAllBytes(path);
-					map.put(path.toString().substring(1), new Entry(path, attr, output));
+					//byte[] output = Files.readAllBytes(path);
+					map.put(path.toString().substring(1), ClassEntry.create(path, attr, environment));
 					return FileVisitResult.CONTINUE;
 				}
 			});
@@ -159,11 +226,12 @@ public class JarMerger implements AutoCloseable {
 			Files.createDirectories(outPath.getParent());
 		}
 
-		if (entry.data != null) {
+		/*if (entry.data != null) {
 			Files.write(outPath, entry.data, StandardOpenOption.CREATE_NEW);
 		} else {
 			Files.copy(entry.path, outPath);
-		}
+		}*/
+		entry.writeTo(outPath);
 
 		Files.getFileAttributeView(entry.path, BasicFileAttributeView.class).setTimes(entry.metadata.creationTime(), entry.metadata.lastAccessTime(), entry.metadata.lastModifiedTime());
 	}
@@ -186,27 +254,33 @@ public class JarMerger implements AutoCloseable {
 			boolean isClass = entry.endsWith(".class");
 			boolean isMinecraft = entriesClient.containsKey(entry) || entry.startsWith("net/minecraft") || !entry.contains("/");
 			Entry result;
-			String side = null;
+			String side/* = null*/;
 
 			Entry entry1 = entriesClient.get(entry);
 			Entry entry2 = entriesServer.get(entry);
 
+			assert entry1 == null || isClass == entry1 instanceof ClassEntry;
+			assert entry2 == null || isClass == entry2 instanceof ClassEntry;
+
 			if (entry1 != null && entry2 != null) {
-				if (Arrays.equals(entry1.data, entry2.data)) {
-					result = entry1;
-				} else {
+				/*if (Arrays.equals(entry1.data, entry2.data)) {
+					result = entry1; //Classes always need to be remapped
+				} else */{
 					if (isClass) {
-						result = new Entry(entry1.path, entry1.metadata, CLASS_MERGER.merge(entry1.data, entry2.data));
+						result = new ClassEntry(entry1.path, entry1.metadata, CLASS_MERGER.merge((ClassEntry) entry1/*.data*/, (ClassEntry) entry2/*.data*/));
 					} else {
 						System.err.println("Common non-class resource: " + entry);
 						// FIXME: More heuristics?
 						result = entry1;
 					}
 				}
+				side = null;
 			} else if ((result = entry1) != null) {
 				side = "CLIENT";
 			} else if ((result = entry2) != null) {
 				side = "SERVER";
+			} else {
+				throw new IllegalStateException("Unable to find entry on either side for " + entry);
 			}
 
 			if (isClass && !isMinecraft && "SERVER".equals(side)) {
@@ -214,15 +288,16 @@ public class JarMerger implements AutoCloseable {
 				return null;
 			}
 
-			if (result != null) {
+			/*if (result != null)*/ {
 				if (isMinecraft && isClass) {
-					byte[] data = result.data;
+					/*byte[] data = result.data;
 					ClassReader reader = new ClassReader(data);
 					ClassWriter writer = new ClassWriter(0);
-					ClassVisitor visitor = writer;
+					ClassVisitor visitor = writer;*/
+					assert result instanceof ClassEntry;
 
 					if (side != null) {
-						visitor = new ClassMerger.SidedClassVisitor(Opcodes.ASM7, visitor, side);
+						((ClassEntry) result).accept(visitor /*=*/-> new ClassMerger.SidedClassVisitor(Opcodes.ASM7, visitor, side));
 					}
 
 					if (removeSnowmen) {
@@ -235,17 +310,17 @@ public class JarMerger implements AutoCloseable {
 						throw new UnsupportedOperationException(); //Shouldn't be needed given there's no annotations
 					}
 
-					if (visitor != writer) {
+					/*if (visitor != writer) {
 						reader.accept(visitor, 0);
 						data = writer.toByteArray();
 						result = new Entry(result.path, result.metadata, data);
-					}
+					}*/
 				}
 
 				return result;
-			} else {
+			}/* else {
 				return null;
-			}
+			}*/
 		}).filter(Objects::nonNull).collect(Collectors.toList());
 
 		for (Entry e : entries) {

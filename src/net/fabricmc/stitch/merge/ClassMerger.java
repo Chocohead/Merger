@@ -22,11 +22,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
+
+import net.fabricmc.stitch.merge.JarMerger.ClassEntry;
 
 import org.objectweb.asm.AnnotationVisitor;
-import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
-import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.ClassNode;
@@ -119,16 +120,18 @@ public class ClassMerger {
 
 	}
 
-	public byte[] merge(byte[] classClient, byte[] classServer) {
-		ClassReader readerC = new ClassReader(classClient);
+	public /*byte[]*/Consumer<ClassVisitor> merge(/*byte[]*/ClassEntry classClient, /*byte[]*/ClassEntry classServer) {
+		/*ClassReader readerC = new ClassReader(classClient);
 		ClassReader readerS = new ClassReader(classServer);
-		ClassWriter writer = new ClassWriter(0);
+		ClassWriter writer = new ClassWriter(0);*/
 
 		ClassNode nodeC = new ClassNode(Opcodes.ASM7);
-		readerC.accept(nodeC, 0);
+		//readerC.accept(nodeC, 0);
+		classClient.accept(nodeC);
 
 		ClassNode nodeS = new ClassNode(Opcodes.ASM7);
-		readerS.accept(nodeS, 0);
+		//readerS.accept(nodeS, 0);
+		classServer.accept(nodeS);
 
 		ClassNode nodeOut = new ClassNode(Opcodes.ASM7);
 		nodeOut.version = nodeC.version;
@@ -231,8 +234,9 @@ public class ClassMerger {
 			}
 		}.merge(nodeOut.methods);
 
-		nodeOut.accept(writer);
-		return writer.toByteArray();
+		/*nodeOut.accept(writer);
+		return writer.toByteArray();*/
+		return nodeOut::accept;
 	}
 
 	//Fished out of StitchUtil
