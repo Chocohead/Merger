@@ -37,9 +37,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
@@ -48,6 +49,7 @@ import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 
+import matcher.Matcher;
 import matcher.NameType;
 import matcher.type.ClassEnv;
 import matcher.type.ClassInstance;
@@ -237,13 +239,15 @@ public class JarMerger implements AutoCloseable {
 	}
 
 	public void merge() throws IOException {
-		ExecutorService service = Executors.newFixedThreadPool(2);
-		service.submit(() -> readToMap(entriesClient, inputClient, false));
-		service.submit(() -> readToMap(entriesServer, inputServer, true));
-		service.shutdown();
+		//ExecutorService service = Executors.newFixedThreadPool(2);
+		Future<?> clientTask = Matcher.threadPool/*service*/.submit(() -> readToMap(entriesClient, inputClient, false));
+		Future<?> serverTask = Matcher.threadPool/*service*/.submit(() -> readToMap(entriesServer, inputServer, true));
+		//service.shutdown();
 		try {
-			service.awaitTermination(1, TimeUnit.HOURS);
-		} catch (InterruptedException e) {
+			//service.awaitTermination(1, TimeUnit.HOURS);
+			clientTask.get(1, TimeUnit.HOURS); //An hour is a long time
+			serverTask.get(1, TimeUnit.HOURS);
+		} catch (InterruptedException | ExecutionException | TimeoutException e) {
 			e.printStackTrace();
 		}
 
