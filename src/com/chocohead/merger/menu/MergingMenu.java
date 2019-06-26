@@ -141,9 +141,5 @@ public class MergingMenu extends Menu {
 					Throwable::printStackTrace));
 			getItems().add(item);
 		}
-
-		getItems().add(new SeparatorMenuItem());
-
-		//Dump merged intermediaries
 	}
 }

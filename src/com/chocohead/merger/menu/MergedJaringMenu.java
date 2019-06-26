@@ -8,8 +8,13 @@ import java.util.function.DoubleConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import javafx.scene.Node;
+import javafx.scene.control.Alert.AlertType;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.SeparatorMenuItem;
 
 import org.objectweb.asm.Opcodes;
 
@@ -20,14 +25,53 @@ import matcher.type.FieldInstance;
 import matcher.type.MethodInstance;
 
 import com.chocohead.merger.UnsharedMatcher;
+import com.chocohead.merger.pane.ExportJarPane;
 
 public class MergedJaringMenu extends Menu {
 	public MergedJaringMenu(Gui gui) {
 		super("Merge Exporting");
 
-		MenuItem item = new MenuItem("Find inner classes");
+		MenuItem item = new MenuItem("Dump merged jar");
+		item.setOnAction(event -> dumpMergedJar(gui));
+		getItems().add(item);
+
+		getItems().add(new SeparatorMenuItem());
+
+		item = new MenuItem("Filter Argo");
+		item.setOnAction(event -> gui.showAlert(AlertType.INFORMATION, "Filtering out Argo types", "TODO", "//Allow picking side to apply on"));
+		getItems().add(item);
+
+		item = new MenuItem("Find inner classes");
 		item.setOnAction(event -> gui.runProgressTask("Finding likely nested inner classes...", progress -> findInnerClasses(gui, progress), () -> {}, Throwable::printStackTrace));
 		getItems().add(item);
+	}
+
+	private static void dumpMergedJar(Gui gui) {
+		Dialog<ExportJarPane> dialog = new Dialog<>();
+		dialog.setResizable(true);
+		dialog.setTitle("Export configuration");
+		dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+
+		Node okButton = dialog.getDialogPane().lookupButton(ButtonType.OK);
+		ExportJarPane content = new ExportJarPane(dialog.getOwner(), okButton);
+
+		dialog.getDialogPane().setContent(content);
+		dialog.setResultConverter(button -> button == ButtonType.OK ? content : null);
+
+		dialog.showAndWait().ifPresent(export -> {
+			assert export != null;
+			assert export.isValid();
+
+			if (export.shouldFixArgo()) {
+				gui.showAlert(AlertType.INFORMATION, "Information", "Information", "Argo detection is still WIP");
+			}
+
+			if (export.shouldFixInners()) {
+				gui.showAlert(AlertType.INFORMATION, "Information", "Information", "The inner class wizard is still WIP");
+			}
+
+			//gui.runProgressTask("Exporting merged jar...", progress -> dumpMergedJar(gui, progress), () -> {}, Throwable::printStackTrace)
+		});
 	}
 
 	private static class ClassSystem {
@@ -105,7 +149,7 @@ public class MergedJaringMenu extends Menu {
 		}
 	}
 
-	private void findInnerClasses(Gui gui, DoubleConsumer progress) {
+	private static void findInnerClasses(Gui gui, DoubleConsumer progress) {
 		List<ClassInstance> classes = Stream.concat(gui.getEnv().getClassesA().stream(), gui.getEnv().getClassesB().stream()).filter(cls -> cls.getUri() != null && cls.isNameObfuscated()).collect(Collectors.toList());
 		List<ClassSystem> systems = new ArrayList<>();
 
