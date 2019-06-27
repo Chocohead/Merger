@@ -1,8 +1,14 @@
 package com.chocohead.merger.menu;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.DoubleConsumer;
 import java.util.stream.Collectors;
@@ -19,13 +25,17 @@ import javafx.scene.control.SeparatorMenuItem;
 import org.objectweb.asm.Opcodes;
 
 import matcher.Matcher;
+import matcher.NameType;
 import matcher.Util;
 import matcher.gui.Gui;
 import matcher.type.ClassInstance;
 import matcher.type.FieldInstance;
+import matcher.type.MemberInstance;
 import matcher.type.MethodInstance;
 
+import com.chocohead.merger.mappings.TinyWriter;
 import com.chocohead.merger.pane.ExportJarPane;
+import com.chocohead.merger.pane.ExportJarPane.Type;
 
 public class MergedJaringMenu extends Menu {
 	public MergedJaringMenu(Gui gui) {
@@ -70,8 +80,229 @@ public class MergedJaringMenu extends Menu {
 				gui.showAlert(AlertType.INFORMATION, "Information", "Information", "The inner class wizard is still WIP");
 			}
 
-			//gui.runProgressTask("Exporting merged jar...", progress -> dumpMergedJar(gui, progress), () -> {}, Throwable::printStackTrace)
+			gui.runProgressTask("Exporting merged jar...", progress -> dumpMergedJar(gui, export, progress), () -> {}, Throwable::printStackTrace);
 		});
+	}
+
+	private static void dumpMergedJar(Gui gui, ExportJarPane export, DoubleConsumer progress) {
+		assignGlue(gui, progress);
+		exportGlue(gui, export.getMappingsFile(), export.getMappingsType(), export.isServerA(), progress);
+	}
+
+	private static void assignGlue(Gui gui, DoubleConsumer progress) {
+		int nextClassID = 1;
+		int nextMethodID = 1;
+		int nextFieldID = 1;
+
+		List<ClassInstance> classes = new ArrayList<>(gui.getEnv().getClasses());
+		classes.sort(Comparator.comparing(ClassInstance::getName));
+
+		List<MethodInstance> methods = new ArrayList<>();
+		List<FieldInstance> fields = new ArrayList<>();
+
+		double progressAmount = 1;
+		for (ClassInstance cls : classes) {
+			assert cls.isInput();
+
+			if (cls.isNameObfuscated()) {
+				if (cls.hasMatch() && cls.getUid() >= 0) {
+					assert cls.getUid() == cls.getMatch().getUid();
+				} else {
+					assert cls.getUid() < 0;
+					cls.setUid(nextClassID++);
+				}
+			}
+
+			for (MethodInstance method : cls.getMethods()) {
+				if (method.isNameObfuscated() && method.getUid() < 0) {
+					methods.add(method);
+				}
+			}
+
+			if (!methods.isEmpty()) {
+				methods.sort(MemberInstance.nameComparator);
+
+				for (MethodInstance method : methods) {
+					int id = nextMethodID++;
+
+					for (MethodInstance m : method.getAllHierarchyMembers()) {
+						m.setUid(id);
+					}
+				}
+
+				methods.clear();
+			}
+
+			for (FieldInstance field : cls.getFields()) {
+				if (field.isNameObfuscated() && field.getUid() < 0) {
+					fields.add(field);
+				}
+			}
+
+			if (!fields.isEmpty()) {
+				fields.sort(MemberInstance.nameComparator);
+
+				for (FieldInstance field : cls.getFields()) {
+					field.setUid(nextFieldID++);
+					assert field.getAllHierarchyMembers().size() == 1;
+				}
+
+				fields.clear();
+			}
+
+			progress.accept(progressAmount++ / classes.size());
+		}
+
+		System.out.printf("Generated glue IDs: %d classes, %d methods, %d fields%n", nextClassID, nextMethodID, nextFieldID);
+	}
+
+	private static void exportGlue(Gui gui, Path to, Type type, boolean serverFirst, DoubleConsumer progress) {
+		TinyWriter writer;
+		try {
+			Files.deleteIfExists(to);
+
+			switch (type) {
+			case Tiny:
+				writer = TinyWriter.normal(to);
+				break;
+
+			case CompressedTiny:
+				writer = TinyWriter.compressed(to);
+				break;
+
+			case TinyV2:
+				writer = TinyWriter.v2(to);
+				break;
+
+			default:
+				throw new IllegalStateException("Unexpected export type: " + type);
+			}
+		} catch (IOException e) {
+			throw new UncheckedIOException("Error opening glue export file at " + to, e);
+		}
+
+		List<ClassInstance> union = new ArrayList<>();
+		List<ClassInstance> serverOnly = new ArrayList<>();
+		List<ClassInstance> clientOnly = new ArrayList<>();
+
+		for (ClassInstance cls : serverFirst ? gui.getEnv().getClassesA() : gui.getEnv().getClassesB()) {
+			(cls.hasMatch() ? union : serverOnly).add(cls);
+		}
+		for (ClassInstance cls : serverFirst ? gui.getEnv().getClassesB() : gui.getEnv().getClassesA()) {
+			if (!cls.hasMatch()) {
+				clientOnly.add(cls);
+			} else {
+				assert union.contains(cls.getMatch());
+			}
+		}
+
+		union.sort(Comparator.comparing(ClassInstance::getName));
+		serverOnly.sort(Comparator.comparing(ClassInstance::getName));
+		clientOnly.sort(Comparator.comparing(ClassInstance::getName));
+
+		double total = union.size() + serverOnly.size() + clientOnly.size();
+		int current = 1;
+
+		for (ClassInstance cls : union) {
+			assert cls.isInput();
+
+			String className;
+			if (cls.isNameObfuscated()) {
+				assert cls.getUid() >= 0: "Missed UID for " + cls;
+				assert Objects.equals(cls.getName(NameType.UID_PLAIN), cls.getMatch().getName(NameType.UID_PLAIN));
+				writer.acceptClass(className = cls.getName(cls.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), cls.getName(NameType.PLAIN), cls.getMatch().getName(NameType.PLAIN));
+			} else {
+				className = cls.getName();
+			}
+
+			for (MethodInstance method : cls.getMethods()) {
+				if (method.isNameObfuscated()) {
+					assert method.getUid() >= 0: "Missed UID for " + method;
+					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), method.getDesc(),
+							method.getName(NameType.PLAIN), method.hasMatch() ? method.getMatch().getName(NameType.PLAIN) : null);
+				}
+			}
+			for (MethodInstance method : cls.getMatch().getMethods()) {
+				if (!method.hasMatch() && method.isNameObfuscated()) {
+					assert method.getUid() >= 0: "Missed UID for " + method + " (class matched to " + cls + ')';
+					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), method.getDesc(), null, method.getName(NameType.PLAIN));
+				}
+			}
+
+			for (FieldInstance field : cls.getFields()) {
+				if (field.isNameObfuscated()) {
+					assert field.getUid() >= 0: "Missed UID for " + field;
+					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), field.getDesc(),
+							field.getName(NameType.PLAIN), field.hasMatch() ? field.getMatch().getName(NameType.PLAIN) : null);
+				}
+			}
+			for (FieldInstance field : cls.getMatch().getFields()) {
+				if (!field.hasMatch() && field.isNameObfuscated()) {
+					assert field.getUid() >= 0: "Missed UID for " + field + " (class matched to " + cls + ')';
+					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), field.getDesc(), null, field.getName(NameType.PLAIN));
+				}
+			}
+
+			progress.accept(current++ / total);
+		}
+
+		for (ClassInstance cls : serverOnly) {
+			assert cls.isInput();
+
+			String className;
+			if (cls.isNameObfuscated()) {
+				assert cls.getUid() >= 0;
+				writer.acceptClass(className = cls.getName(cls.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), cls.getName(NameType.PLAIN), null);
+			} else {
+				className = cls.getName();
+			}
+
+			for (MethodInstance method : cls.getMethods()) {
+				if (method.isNameObfuscated()) {
+					assert method.getUid() >= 0;
+					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), method.getDesc(), method.getName(NameType.PLAIN), null);
+				}
+			}
+
+			for (FieldInstance field : cls.getFields()) {
+				if (field.isNameObfuscated()) {
+					assert field.getUid() >= 0;
+					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), field.getDesc(), field.getName(NameType.PLAIN), null);
+				}
+			}
+
+			progress.accept(current++ / total);
+		}
+
+		for (ClassInstance cls : clientOnly) {
+			assert cls.isInput();
+
+			String className;
+			if (cls.isNameObfuscated()) {
+				assert cls.getUid() >= 0;
+				writer.acceptClass(className = cls.getName(cls.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), null, cls.getName(NameType.PLAIN));
+			} else {
+				className = cls.getName();
+			}
+
+			for (MethodInstance method : cls.getMethods()) {
+				if (method.isNameObfuscated()) {
+					assert method.getUid() >= 0;
+					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), method.getDesc(), null, method.getName(NameType.PLAIN));
+				}
+			}
+
+			for (FieldInstance field : cls.getFields()) {
+				if (field.isNameObfuscated()) {
+					assert field.getUid() >= 0;
+					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), field.getDesc(), null, field.getName(NameType.PLAIN));
+				}
+			}
+
+			progress.accept(current++ / total);
+		}
+
+		Util.closeSilently(writer);
 	}
 
 	private static class ClassSystem {

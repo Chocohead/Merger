@@ -4,6 +4,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import javafx.scene.Node;
 import javafx.scene.control.Button;
@@ -24,6 +25,21 @@ import matcher.gui.Gui.SelectedFile;
 import matcher.gui.GuiConstants;
 
 public class ExportJarPane extends GridPane {
+	public enum Type {
+		Tiny("Tiny", "*.tiny"), CompressedTiny("Tiny (gzipped)", "*.tiny.gz"), TinyV2("Tiny v2", "*.tiny");
+
+		public final String name, extension;
+
+		private Type(String name, String extension) {
+			this.name = name;
+			this.extension = extension;
+		}
+
+		public ExtensionFilter toFilter() {
+			return new ExtensionFilter(name, extension);
+		}
+	}
+
 	private final Node okButton;
 	private Path mergedJar, mappings, argoJar;
 	private String mappingType;
@@ -211,7 +227,7 @@ public class ExportJarPane extends GridPane {
 	}
 
 	private static List<ExtensionFilter> mappingExtensionFilter() {
-		return Arrays.asList(new ExtensionFilter("Tiny", "*.tiny"), new ExtensionFilter("Tiny v2", "*.tiny"));
+		return Arrays.stream(Type.values()).map(Type::toFilter).collect(Collectors.toList());
 	}
 
 	void onConfigurationChange() {
@@ -227,8 +243,15 @@ public class ExportJarPane extends GridPane {
 		return mergedJar;
 	}
 
-	public String getMappingsType() {
-		return mappingType;
+	public Type getMappingsType() {
+		for (Type type : Type.values()) {
+			if (type.name.equals(mappingType)) {
+				return type;
+			}
+		}
+
+		assert mappingType != null; //Don't use this if the export is invalid
+		throw new IllegalStateException("Unable to find mapping type: " + mappingType);
 	}
 
 	public Path getMappingsFile() {
