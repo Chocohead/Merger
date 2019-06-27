@@ -286,7 +286,11 @@ public class JarMerger implements AutoCloseable {
 					result = entry1; //Classes always need to be remapped
 				} else */{
 					if (isClass) {
-						result = new ClassEntry(entry1.path, entry1.metadata, CLASS_MERGER.merge((ClassEntry) entry1/*.data*/, (ClassEntry) entry2/*.data*/));
+						try {
+							result = new ClassEntry(entry1.path, entry1.metadata, CLASS_MERGER.merge((ClassEntry) entry1/*.data*/, (ClassEntry) entry2/*.data*/));
+						} catch (IllegalStateException e) {
+							throw new RuntimeException("Exception merging " + entry, e);
+						}
 					} else {
 						System.err.println("Common non-class resource: " + entry);
 						// FIXME: More heuristics?

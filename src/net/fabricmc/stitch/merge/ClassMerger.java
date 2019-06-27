@@ -166,6 +166,11 @@ public class ClassMerger {
 			nodeOut.visibleTypeAnnotations.addAll(nodeC.visibleTypeAnnotations);
 		}
 
+		if (nodeC.interfaces.size() + nodeS.interfaces.size() >= 4) {
+			System.out.println("Sorting interfaces in " + nodeOut.name);
+			nodeC.interfaces.sort(null);
+			nodeS.interfaces.sort(null);
+		}
 		List<String> itfs = /*StitchUtil.*/mergePreserveOrder(nodeC.interfaces, nodeS.interfaces);
 		nodeOut.interfaces = new ArrayList<>();
 
@@ -240,12 +245,14 @@ public class ClassMerger {
 	}
 
 	//Fished out of StitchUtil
-	private static List<String> mergePreserveOrder(List<String> first, List<String> second) {
+	static List<String> mergePreserveOrder(List<String> first, List<String> second) {
 		List<String> out = new ArrayList<>();
 		int i = 0;
 		int j = 0;
 
 		while (i < first.size() || j < second.size()) {
+			int startI = i, startJ = j;
+
 			while (i < first.size() && j < second.size()
 					&& first.get(i).equals(second.get(j))) {
 				out.add(first.get(i));
@@ -261,6 +268,10 @@ public class ClassMerger {
 			while (j < second.size() && !first.contains(second.get(j))) {
 				out.add(second.get(j));
 				j++;
+			}
+
+			if (startI == i && startJ == j) {
+				throw new IllegalStateException("Deadlocked over " + first + " and " + second);
 			}
 		}
 
