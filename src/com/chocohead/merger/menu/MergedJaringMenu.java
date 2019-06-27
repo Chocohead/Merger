@@ -113,7 +113,9 @@ public class MergedJaringMenu extends Menu {
 					assert cls.getUid() == cls.getMatch().getUid();
 				} else {
 					assert cls.getUid() < 0;
-					cls.setUid(nextClassID++);
+					int id;
+					cls.setUid(id = nextClassID++);
+					assert cls.getUid() == id: "Failed to claim UID for " + cls;
 				}
 			}
 
@@ -127,10 +129,21 @@ public class MergedJaringMenu extends Menu {
 				methods.sort(MemberInstance.nameComparator);
 
 				for (MethodInstance method : methods) {
-					int id = nextMethodID++;
+					int id;
+					int[] UIDs = method.getAllHierarchyMembers().stream().mapToInt(MethodInstance::getUid).distinct().sorted().toArray();
+					if (UIDs.length > 2 || UIDs.length == 2 && UIDs[0] != -1) {
+						throw new IllegalStateException("Inconsistent method hierachy naming: " + Arrays.toString(UIDs));
+					} else if (UIDs.length == 2) {
+						id = UIDs[1];
+					} else {
+						assert UIDs.length == 1;
+						id = UIDs[0] == -1 ? nextMethodID++ : UIDs[0];
+					}
 
 					for (MethodInstance m : method.getAllHierarchyMembers()) {
+						assert m.getUid() <= 0 || m.getUid() == id: "Changed " + m + " UID from " + m.getUid() + " to " + id + ", hierachy is " + method.getAllHierarchyMembers().stream().map(mtd -> mtd + " => " + mtd.getUid()).collect(Collectors.joining(", ", "[", "]"));
 						m.setUid(id);
+						assert m.getUid() == id: "Failed to claim UID for " + m;
 					}
 				}
 
@@ -146,8 +159,10 @@ public class MergedJaringMenu extends Menu {
 			if (!fields.isEmpty()) {
 				fields.sort(MemberInstance.nameComparator);
 
-				for (FieldInstance field : cls.getFields()) {
-					field.setUid(nextFieldID++);
+				for (FieldInstance field : fields) {
+					int id;
+					field.setUid(id = nextFieldID++);
+					assert field.getUid() == id: "Failed to claim UID for " + field;
 					assert field.getAllHierarchyMembers().size() == 1;
 				}
 
