@@ -89,7 +89,12 @@ public class MergedJaringMenu extends Menu {
 				gui.showAlert(AlertType.INFORMATION, "Information", "Information", "The inner class wizard is still WIP");
 			}
 
-			gui.runProgressTask("Exporting merged jar...", progress -> dumpMergedJar(gui, export, progress), () -> {}, Throwable::printStackTrace);
+			gui.runProgressTask("Exporting merged jar...", progress -> dumpMergedJar(gui, export, progress),
+					() -> gui.showAlert(AlertType.INFORMATION, "Exporting merged jar...", "Export complete", "Merged jar has been exported to" + export.getMergeJar()),
+					t -> {
+						t.printStackTrace();
+						gui.showAlert(AlertType.ERROR, "Exporting merged jar...", "Export failed", "Jar merging failed due to " + t.getLocalizedMessage() + "\nPlease report this!");
+					});
 		});
 	}
 
