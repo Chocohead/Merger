@@ -28,7 +28,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collections;
 import java.util.HashMap;
@@ -42,6 +41,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
@@ -51,7 +51,6 @@ import org.objectweb.asm.Opcodes;
 
 import matcher.Matcher;
 import matcher.NameType;
-import matcher.type.ClassEnv;
 import matcher.type.ClassInstance;
 
 public class JarMerger implements AutoCloseable {
@@ -98,13 +97,24 @@ public class JarMerger implements AutoCloseable {
 		private final ClassWriter writer = new ClassWriter(0);
 		private ClassVisitor visitor = writer;
 
-		public static ClassEntry create(Path path, BasicFileAttributes metadata, ClassEnv environment) {
+		public static ClassEntry fill(Map<String, Entry> entries, Path path, BasicFileAttributes metadata, Function<String, ClassInstance> classFactory) {
 			assert path.toString().endsWith(".class");
 
 			String name = path.toString().substring(1, path.toString().length() - 6);
-			ClassInstance cls = environment.getClsByName(name, NameType.PLAIN);
+			ClassInstance cls = classFactory.apply(name);
 
-			return new ClassEntry(path, metadata, visitor -> cls.accept(visitor, NameType.UID_PLAIN));
+			assert cls != null && cls.getUri() != null: "Unable to find valid class for " + name + " (produced " + cls + ')';
+			NameType nameType;
+			if (cls.hasMappedName()) {
+				nameType = NameType.MAPPED_PLAIN;
+			} else {
+				nameType = NameType.UID_PLAIN;
+			}
+
+			String replacementPath = cls.getName(nameType).replace('.', '/') + ".class";
+			ClassEntry out = new ClassEntry(path.getFileSystem().getPath(replacementPath), metadata, visitor -> cls.accept(visitor, nameType));
+			if (entries != null) entries.put(replacementPath, out); //out.path doesn't actually exist, but we can just about get away with it
+			return out;
 		}
 
 		public ClassEntry(Path path, BasicFileAttributes metadata, Consumer<ClassVisitor> contentsFinaliser) {
@@ -129,7 +139,7 @@ public class JarMerger implements AutoCloseable {
 	}
 
 	private static final ClassMerger CLASS_MERGER = new ClassMerger();
-	private final ClassEnv environment;
+	private final Function<String, ClassInstance> clientClasses, serverClasses;
 	private final /*StitchUtil.*/FileSystem/*Delegate inputClientFs, inputServerFs,*/ outputFs;
 	private final Path inputClient, inputServer;
 	private final Map<String, Entry> entriesClient, entriesServer;
@@ -154,17 +164,20 @@ public class JarMerger implements AutoCloseable {
 	}
 	//Up to here
 
-	public JarMerger(ClassEnv environment, /*File*/Path inputClient, /*File*/Path inputServer, /*File*/Path output) throws IOException {
+	public JarMerger(Function<String, ClassInstance> clientClasses, Function<String, ClassInstance> serverClasses, /*File*/Path inputClient, /*File*/Path inputServer, /*File*/Path output) throws IOException {
 		/*if (output.exists()) {
 			if (!output.delete()) {
 				throw new IOException("Could not delete " + output.getName());
 			}
 		}*/
-		assert Files.notExists(output); //Let's just presume the output path is clear
+		Files.deleteIfExists(output); //Clear the output if it is obstructed
+		assert Files.notExists(output);
 
-		this.environment = environment;
-		this.inputClient = /*(inputClientFs = StitchUtil.getJarFileSystem(inputClient, false)).get().getPath("/")*/inputClient;
-		this.inputServer = /*(inputServerFs = StitchUtil.getJarFileSystem(inputServer, false)).get().getPath("/")*/inputServer;
+		this.clientClasses = clientClasses;
+		this.serverClasses = serverClasses;
+
+		this.inputClient = /*(inputClientFs = StitchUtil.*/getJarFileSystem(inputClient, false)/*).get()*/.getPath("/");
+		this.inputServer = /*(inputServerFs = StitchUtil.*/getJarFileSystem(inputServer, false)/*).get()*/.getPath("/");
 		outputFs = /*StitchUtil.*/getJarFileSystem(output, true);
 
 		entriesClient = new HashMap<>();
@@ -212,8 +225,9 @@ public class JarMerger implements AutoCloseable {
 						return FileVisitResult.CONTINUE;
 					}
 
-					//byte[] output = Files.readAllBytes(path);
-					map.put(path.toString().substring(1), ClassEntry.create(path, attr, environment));
+					/*byte[] output = Files.readAllBytes(path);
+					map.put(path.toString().substring(1), new Entry(path, attr, output));*/
+					ClassEntry.fill(map, path, attr, isServer ? serverClasses : clientClasses);
 					return FileVisitResult.CONTINUE;
 				}
 			});
@@ -235,7 +249,8 @@ public class JarMerger implements AutoCloseable {
 		}*/
 		entry.writeTo(outPath);
 
-		Files.getFileAttributeView(entry.path, BasicFileAttributeView.class).setTimes(entry.metadata.creationTime(), entry.metadata.lastAccessTime(), entry.metadata.lastModifiedTime());
+		//TODO: Add me back once a suitable solution for ClassEntry is found
+		//Files.getFileAttributeView(entry.path, BasicFileAttributeView.class).setTimes(entry.metadata.creationTime(), entry.metadata.lastAccessTime(), entry.metadata.lastModifiedTime());
 	}
 
 	public void merge() throws IOException {
@@ -263,8 +278,8 @@ public class JarMerger implements AutoCloseable {
 			Entry entry1 = entriesClient.get(entry);
 			Entry entry2 = entriesServer.get(entry);
 
-			assert entry1 == null || isClass == entry1 instanceof ClassEntry;
-			assert entry2 == null || isClass == entry2 instanceof ClassEntry;
+			assert entry1 == null || isClass == entry1 instanceof ClassEntry: "Expected " + (isClass ? "class" : "non-class") + " for " + entry + " but found " + entry1;
+			assert entry2 == null || isClass == entry2 instanceof ClassEntry: "Expected " + (isClass ? "class" : "non-class") + " for " + entry + " but found " + entry1;
 
 			if (entry1 != null && entry2 != null) {
 				/*if (Arrays.equals(entry1.data, entry2.data)) {

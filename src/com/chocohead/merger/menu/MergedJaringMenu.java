@@ -4,8 +4,10 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
@@ -21,6 +23,7 @@ import javafx.scene.control.Dialog;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import net.fabricmc.stitch.merge.JarMerger;
 
 import org.objectweb.asm.Opcodes;
 
@@ -28,8 +31,10 @@ import matcher.Matcher;
 import matcher.NameType;
 import matcher.Util;
 import matcher.gui.Gui;
+import matcher.type.ClassEnvironment;
 import matcher.type.ClassInstance;
 import matcher.type.FieldInstance;
+import matcher.type.InputFile;
 import matcher.type.MemberInstance;
 import matcher.type.MethodInstance;
 
@@ -91,6 +96,27 @@ public class MergedJaringMenu extends Menu {
 	private static void dumpMergedJar(Gui gui, ExportJarPane export, DoubleConsumer progress) {
 		assignGlue(gui, progress);
 		exportGlue(gui, export.getMappingsFile(), export.getMappingsType(), export.isServerA(), progress);
+
+		ClassEnvironment env = gui.getEnv();
+		Path aIn = pullInput(env.getInputFilesA());
+		Path bIn = pullInput(env.getInputFilesB());
+
+		try (JarMerger merger = new JarMerger(export.isClientA() ? env::getClsByNameA : env::getClsByNameB, export.isServerA() ? env::getClsByNameA : env::getClsByNameB, export.isClientA() ? aIn : bIn, export.isServerA() ? aIn : bIn, export.getMergeJar())) {
+			System.out.println("Merging...");
+
+			merger.merge();
+
+			System.out.println("Merge completed!");
+		} catch (IOException e) {
+			throw new UncheckedIOException("Error merging jars", e);
+		}
+	}
+
+	private static Path pullInput(Collection<InputFile> inputs) {
+		if (inputs.size() != 1) throw new UnsupportedOperationException("Unable to merge multiple input files");
+		InputFile input = inputs.iterator().next();
+
+		return input.hasPath() ? input.path : Paths.get(input.fileName);
 	}
 
 	private static void assignGlue(Gui gui, DoubleConsumer progress) {
