@@ -45,6 +45,10 @@ public class MergedJaringMenu extends Menu {
 		item.setOnAction(event -> dumpMergedJar(gui));
 		getItems().add(item);
 
+		item = new MenuItem("Clear UIDs");
+		item.setOnAction(event -> gui.runProgressTask("Clearing UIDs", progress -> clearGlue(gui, progress), () -> {}, Throwable::printStackTrace));
+		getItems().add(item);
+
 		getItems().add(new SeparatorMenuItem());
 
 		item = new MenuItem("Filter Argo");
@@ -303,6 +307,54 @@ public class MergedJaringMenu extends Menu {
 		}
 
 		Util.closeSilently(writer);
+	}
+
+	private static void clearGlue(Gui gui, DoubleConsumer progress) {
+		List<MethodInstance> methods = new ArrayList<>();
+		List<FieldInstance> fields = new ArrayList<>();
+
+		double toDo = gui.getEnv().getClasses().size();
+		int progressAmount = 1;
+
+		for (ClassInstance cls : gui.getEnv().getClasses()) {
+			assert cls.isInput();
+
+			if (cls.isNameObfuscated() && cls.getUid() >= 0) {
+				cls.setUid(-1);
+			}
+
+			for (MethodInstance method : cls.getMethods()) {
+				if (method.isNameObfuscated() && method.getUid() >= 0) {
+					methods.add(method);
+				}
+			}
+
+			if (!methods.isEmpty()) {
+				for (MethodInstance method : methods) {
+					for (MethodInstance m : method.getAllHierarchyMembers()) {
+						m.setUid(-1);
+					}
+				}
+
+				methods.clear();
+			}
+
+			for (FieldInstance field : cls.getFields()) {
+				if (field.isNameObfuscated() && field.getUid() >= 0) {
+					fields.add(field);
+				}
+			}
+
+			if (!fields.isEmpty()) {
+				for (FieldInstance field : cls.getFields()) {
+					field.setUid(-1);
+				}
+
+				fields.clear();
+			}
+
+			progress.accept(progressAmount++ / toDo);
+		}
 	}
 
 	private static class ClassSystem {
