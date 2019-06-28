@@ -1,9 +1,13 @@
 package com.chocohead.merger.menu;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.DoubleConsumer;
+import java.util.stream.Collectors;
 
 import javafx.scene.control.Alert;
 import javafx.scene.control.Alert.AlertType;
@@ -12,8 +16,15 @@ import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.LineNumberNode;
+
+import matcher.Matcher;
 import matcher.gui.Gui;
+import matcher.type.ClassInstance;
 import matcher.type.MatchType;
+import matcher.type.MethodInstance;
 
 import com.chocohead.merger.MergeStep;
 
@@ -77,6 +88,57 @@ public class MergingMenu extends Menu {
 				matched = Math.abs(previousUnmatchedClasses - unmatchedClasses) + Math.abs(previousUnmatchedMethods - unmatchedMethods) + Math.abs(previousUnmatchedFields - unmatchedFields);
 				System.out.println("Matched " + (unmatchedClasses - previousUnmatchedClasses) + " classes (" + unmatchedClasses + " left unmatched, " + gui.getEnv().getClassesA().size() + " total)");
 			} while (matched > 0);
+
+			assert assertMatches();
+		}
+
+		private boolean assertMatches() {
+			List<ClassInstance> classes = gui.getEnv().getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && cls.hasMatch() && cls.getMethods().length > 0).collect(Collectors.toList());
+			Set<MethodInstance> mismatches = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+			Matcher.runInParallel(classes, cls -> {
+				for (MethodInstance method : cls.getMethods()) {
+					if (!method.hasMatch()) continue;
+					assert method.isReal();
+
+					MethodInstance match = method.getMatch();
+					assert match.isReal();
+
+					InsnList methodIns = method.getAsmNode().instructions;
+					InsnList matchedIns = match.getAsmNode().instructions;
+
+					if (methodIns.size() != matchedIns.size()) {
+						mismatches.add(method);
+						continue;
+					}
+
+					for (int insn = 0; insn < methodIns.size(); insn++) {
+						AbstractInsnNode insnA = methodIns.get(insn);
+						AbstractInsnNode insnB = matchedIns.get(insn);
+						assert insnA.getType() == insnB.getType(): "Mismatch between " + method + " and " + match + ' ' + insn + " in: " + insnA + " vs " + insnB;
+						assert insnA.getOpcode() == insnB.getOpcode();
+
+						if (insnA.getType() == AbstractInsnNode.LINE) {
+							if (((LineNumberNode) insnA).line != ((LineNumberNode) insnB).line)  {
+								mismatches.add(method);
+								break;
+							}
+						}
+					}
+				}
+			}, progress -> {});
+
+			if (!mismatches.isEmpty()) {
+				System.out.println("Found mismatched methods after full pass:");
+
+				for (MethodInstance method : mismatches) {
+					System.out.println('\t' + method.toString() + " => " + method.getMatch());
+				}
+
+				return false;
+			} else {
+				return true;
+			}
 		}
 	}
 
