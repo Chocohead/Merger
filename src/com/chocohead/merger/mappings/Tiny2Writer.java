@@ -110,6 +110,7 @@ public class Tiny2Writer extends TinyWriter {
 				writer.write('\t');
 				if (mthState.client != null) writer.write(mthState.client);
 				writer.write('\n');
+				assert mthState.server != null || mthState.client != null;
 			}
 
 			for (MemberMappingState fldState : clsState.fieldMap.values()) {
@@ -122,6 +123,7 @@ public class Tiny2Writer extends TinyWriter {
 				writer.write('\t');
 				if (fldState.client != null) writer.write(fldState.client);
 				writer.write('\n');
+				assert fldState.server != null || fldState.client != null;
 			}
 		}
 

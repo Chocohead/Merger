@@ -265,6 +265,7 @@ public class MergedJaringMenu extends Menu {
 			if (cls.isNameObfuscated()) {
 				assert cls.getUid() >= 0: "Missed UID for " + cls;
 				assert Objects.equals(cls.getName(NameType.UID_PLAIN), cls.getMatch().getName(NameType.UID_PLAIN));
+				assert cls.hasMappedName() == cls.getMatch().hasMappedName();
 				writer.acceptClass(className = cls.getName(cls.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), cls.getName(NameType.PLAIN), cls.getMatch().getName(NameType.PLAIN));
 			} else {
 				className = cls.getName();
