@@ -46,7 +46,6 @@ public class TinyWriter implements Closeable {
 	public void acceptClass(String glue, String server, String client) {
 		try {
 			writer.write("CLASS\t");
-			writer.write('\t');
 			writer.write(glue);
 			writer.write('\t');
 			if (server != null) writer.write(server);

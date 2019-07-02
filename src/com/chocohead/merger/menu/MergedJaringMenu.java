@@ -281,7 +281,7 @@ public class MergedJaringMenu extends Menu {
 			for (MethodInstance method : cls.getMatch().getMethods()) {
 				if (!method.hasMatch() && method.isNameObfuscated()) {
 					assert method.getUid() >= 0: "Missed UID for " + method + " (class matched to " + cls + ')';
-					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), serverNamer), null, method.getName(NameType.PLAIN));
+					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), clientNamer), null, method.getName(NameType.PLAIN));
 				}
 			}
 
@@ -295,7 +295,7 @@ public class MergedJaringMenu extends Menu {
 			for (FieldInstance field : cls.getMatch().getFields()) {
 				if (!field.hasMatch() && field.isNameObfuscated()) {
 					assert field.getUid() >= 0: "Missed UID for " + field + " (class matched to " + cls + ')';
-					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(field.getDesc(), serverNamer), null, field.getName(NameType.PLAIN));
+					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(field.getDesc(), clientNamer), null, field.getName(NameType.PLAIN));
 				}
 			}
 
