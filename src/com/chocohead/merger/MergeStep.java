@@ -54,9 +54,8 @@ public enum MergeStep {
 				for (MethodInstance method : cls.getMethods()) {
 					if (!method.isReal() || !method.hasMatch()) continue;
 
-					double closeness = ClassifierUtil.compareInsns(method, method.getMatch());
-					if (closeness < 0.99) {
-						System.out.println("Method contents mismatch in " + cls.getName() + '#' + method.getName() + method.getDesc() + ", only matched with " + closeness);
+					if (!MethodCloseness.isCloseEnough(method, method.getMatch())) {
+						System.out.println("Method contents mismatch in " + cls.getName() + '#' + method.getName() + method.getDesc() + ", only matched with " + ClassifierUtil.compareInsns(method, method.getMatch()));
 						mismatches.add(cls);
 					}
 				}
@@ -97,9 +96,8 @@ public enum MergeStep {
 					InsnList matchedIns = matched.getAsmNode().instructions;
 
 					//assert ClassifierUtil.compareInsns(methodIns, matchedIns, env) > 0.99;
-					double closeness = ClassifierUtil.compareInsns(method, matched);
-					if (closeness < 0.99) {
-						System.out.println("Unexpected method contents mismatch in " + cls.getName() + '#' + method.getName() + method.getDesc() + ", only matched with " + closeness);
+					if (!MethodCloseness.isCloseEnough(method, matched)) {
+						System.out.println("Unexpected method contents mismatch in " + cls.getName() + '#' + method.getName() + method.getDesc() + ", only matched with " + ClassifierUtil.compareInsns(method, matched));
 						continue;
 					}
 					assert methodIns.size() == matchedIns.size();
@@ -193,9 +191,8 @@ public enum MergeStep {
 							assert methodB != null;
 
 							if (methodA.getMatch() != methodB && methodMatches.get(methodA) != methodB) {
-								closeness = ClassifierUtil.compareInsns(methodA, methodB);
-								if (closeness < 0.99) {
-									System.out.println("Expected " + methodA + " and " + methodB + " to be equal, only matched with " + closeness);
+								if (!MethodCloseness.isCloseEnough(methodA, methodB)) {
+									System.out.println("Expected " + methodA + " and " + methodB + " to be equal, only matched with " + ClassifierUtil.compareInsns(methodA, methodB));
 								} else {
 									//System.out.println("Found new method match");
 									methodMatches.put(methodA, methodB);
@@ -294,8 +291,7 @@ public enum MergeStep {
 					//The matched method should certainly exist too
 					assert matched.isReal();
 
-					double closeness = ClassifierUtil.compareInsns(method, matched);
-					if (closeness < 0.99) {
+					if (!MethodCloseness.isCloseEnough(method, matched)) {
 						mismatches.add(method);
 						continue;
 					}
