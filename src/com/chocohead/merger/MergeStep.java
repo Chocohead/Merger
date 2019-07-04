@@ -361,7 +361,7 @@ public enum MergeStep {
 				if (method.hasMatch()) {
 					if (current != null) {
 						while (matchMethods[++j] != method.getMatch()) {
-							assert !matchMethods[j].hasMatch();
+							assert !matchMethods[j].hasMatch(): "Found matched method before another matching pair: " + matchMethods[j] + " => " + matchMethods[j].getMatch() + " whilst looking for " + method + " => " + method.getMatch();
 							current.matchMethods.add(matchMethods[j]);
 						}
 
