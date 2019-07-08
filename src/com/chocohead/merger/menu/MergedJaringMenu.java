@@ -14,6 +14,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.DoubleConsumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -83,12 +84,13 @@ public class MergedJaringMenu extends Menu {
 			assert export != null;
 			assert export.isValid();
 
-			if (export.shouldFixArgo()) {
-				gui.showAlert(AlertType.INFORMATION, "Information", "Information", "Argo detection is still WIP");
-			}
+			if (export.shouldFixAnyInners()) {
+				if (export.shouldFixSimpleInners()) {
+				}
 
-			if (export.shouldFixInners()) {
-				gui.showAlert(AlertType.INFORMATION, "Information", "Information", "The inner class wizard is still WIP");
+				if (export.shouldFixAllInners()) {
+					gui.showAlert(AlertType.INFORMATION, "Information", "Information", "The inner class wizard is still WIP");
+				}
 			}
 
 			gui.runProgressTask("Exporting merged jar...", progress -> dumpMergedJar(gui, export, progress),
@@ -102,7 +104,7 @@ public class MergedJaringMenu extends Menu {
 
 	private static void dumpMergedJar(Gui gui, ExportJarPane export, DoubleConsumer progress) {
 		assignGlue(gui, progress);
-		exportGlue(gui, export.getMappingsFile(), export.getMappingsType(), export.isServerA(), progress);
+		exportGlue(gui, export.getMappingsFile(), export.getMappingsType(), export.isServerA(), exluderFor(export.excludedA()), exluderFor(export.excludedB()), progress);
 
 		ClassEnvironment env = gui.getEnv();
 		Path aIn = pullInput(env.getInputFilesA());
@@ -117,6 +119,13 @@ public class MergedJaringMenu extends Menu {
 		} catch (IOException e) {
 			throw new UncheckedIOException("Error merging jars", e);
 		}
+	}
+
+	private static Predicate<ClassInstance> exluderFor(String pattern) {
+		if (pattern.isEmpty()) return cls -> false;
+
+		Pattern regex = Pattern.compile(pattern);
+		return cls -> regex.matcher(cls.getName()).matches();
 	}
 
 	private static Path pullInput(Collection<InputFile> inputs) {
@@ -208,7 +217,7 @@ public class MergedJaringMenu extends Menu {
 		System.out.printf("Generated glue IDs: %d classes, %d methods, %d fields%n", nextClassID, nextMethodID, nextFieldID);
 	}
 
-	private static void exportGlue(Gui gui, Path to, Type type, boolean serverFirst, DoubleConsumer progress) {
+	private static void exportGlue(Gui gui, Path to, Type type, boolean serverFirst, Predicate<ClassInstance> aSkipper, Predicate<ClassInstance> bSkipper, DoubleConsumer progress) {
 		TinyWriter writer;
 		try {
 			Files.deleteIfExists(to);
@@ -238,9 +247,11 @@ public class MergedJaringMenu extends Menu {
 		List<ClassInstance> clientOnly = new ArrayList<>();
 
 		for (ClassInstance cls : serverFirst ? gui.getEnv().getClassesA() : gui.getEnv().getClassesB()) {
+			if ((serverFirst ? aSkipper : bSkipper).test(cls)) continue;
 			(cls.hasMatch() ? union : serverOnly).add(cls);
 		}
 		for (ClassInstance cls : serverFirst ? gui.getEnv().getClassesB() : gui.getEnv().getClassesA()) {
+			if ((serverFirst ? bSkipper : aSkipper).test(cls)) continue;
 			if (!cls.hasMatch()) {
 				clientOnly.add(cls);
 			} else {

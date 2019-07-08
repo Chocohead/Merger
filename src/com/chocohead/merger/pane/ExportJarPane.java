@@ -10,11 +10,11 @@ import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
-import javafx.scene.control.RadioButton;
 import javafx.scene.control.Separator;
 import javafx.scene.control.TextField;
 import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ToggleGroup;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.stage.FileChooser.ExtensionFilter;
@@ -39,11 +39,15 @@ public class ExportJarPane extends GridPane {
 			return new ExtensionFilter(name, extension);
 		}
 	}
+	public enum Side {
+		A, B, BOTH;
+	}
 
 	private final Node okButton;
-	private Path mergedJar, mappings, argoJar;
+	private Path mergedJar, mappings;
 	private String mappingType;
-	private boolean serverFirst = true, applyArgo;
+	private boolean serverFirst = true;
+	private TextField excludedA, excludedB;
 	private byte innerFixes;
 
 	public ExportJarPane(Window window, Node okButton) {
@@ -99,66 +103,6 @@ public class ExportJarPane extends GridPane {
 		add(mappingExportButton, 2, 1);
 
 
-		Separator seperator = new Separator();
-		seperator.setMinHeight(GuiConstants.padding * 3);
-		add(seperator, 0, 3, 3, 1);
-
-
-		add(new Label("Argo jar:"), 0, 5);
-
-		TextField argoJarLabel = new TextField();
-		argoJarLabel.setPrefWidth(320);
-		argoJarLabel.setEditable(false);
-		argoJarLabel.setMouseTransparent(true);
-		argoJarLabel.setFocusTraversable(false);
-		argoJarLabel.setDisable(true);
-		add(argoJarLabel, 1, 5);
-
-		Button argoButton = new Button("Select");
-		argoButton.setOnAction(event -> {
-			SelectedFile selection = Gui.requestFile("Open Argo jar", window, jarExtensionFilter(), true);
-
-			if (selection != null) {
-				argoJarLabel.setText(selection.path.toAbsolutePath().toString());
-				argoJar = selection.path;
-
-				onConfigurationChange();
-			}
-		});
-		argoButton.setDisable(true);
-		add(argoButton, 2, 5);
-
-
-		add(new Label("Apply Argo fix to:"), 0, 4);
-
-		HBox hBox = new HBox(GuiConstants.padding * 4);
-		ToggleGroup argoFixGroup = new ToggleGroup();
-
-		RadioButton radioN = new RadioButton("Neither");
-		radioN.setToggleGroup(argoFixGroup);
-		radioN.setSelected(true);
-		hBox.getChildren().add(radioN);
-
-		RadioButton radioA = new RadioButton("A (left)");
-		radioA.setToggleGroup(argoFixGroup);
-		radioA.setDisable(true);
-		hBox.getChildren().add(radioA);
-
-		RadioButton radioB = new RadioButton("B (right)");
-		radioB.setToggleGroup(argoFixGroup);
-		hBox.getChildren().add(radioB);
-
-		argoFixGroup.selectedToggleProperty().addListener((observable, oldToggle, newToggle) -> {
-			boolean disable = newToggle == radioN;
-			argoJarLabel.setDisable(disable);
-			argoButton.setDisable(disable);
-
-			applyArgo = !disable;
-			onConfigurationChange();
-		});
-		add(hBox, 1, 4, 2, 1);
-
-
 		add(new Label("Jar merge order:"), 0, 2);
 
 		GridPane grid = new GridPane();
@@ -176,26 +120,39 @@ public class ExportJarPane extends GridPane {
 		grid.add(clientServerToggle, 2, 0);
 
 		mergeOrderGroup.selectedToggleProperty().addListener((observable, oldToggle, newToggle) -> {
-			if (serverFirst = newToggle == serverClientToggle) {
-				if (radioA.isSelected()) {
-					radioB.setSelected(true);
-				}
-				radioA.setDisable(true);
-				radioB.setDisable(false);
-			} else {
-				if (radioB.isSelected()) {
-					radioA.setSelected(true);
-				}
-				radioA.setDisable(false);
-				radioB.setDisable(true);
-			}
+			serverFirst = newToggle == serverClientToggle;
+
+			TextField temp = excludedA;
+			excludedA = excludedB;
+			excludedB = temp;
 		});
 		add(grid, 1, 2, 2, 1);
 
 
-		add(new Label("Fix inner classes:"), 0, 6);
+		Separator seperator = new Separator();
+		seperator.setMinHeight(GuiConstants.padding * 3);
+		add(seperator, 0, 3, 3, 1);
 
-		hBox = new HBox(GuiConstants.padding * 4);
+
+		add(new Label("A side deobf'd classes:"), 0, 4);
+
+		excludedA = new TextField();
+		excludedA.setPrefWidth(320);
+		excludedA.setTooltip(new Tooltip("Regex to filter classes which are fully deobfuscated already"));
+		add(excludedA, 1, 4, 2, 1);
+
+
+		add(new Label("B side deobf'd classes:"), 0, 5);
+
+		excludedB = new TextField();
+		excludedB.setPrefWidth(320);
+		excludedB.setTooltip(new Tooltip("Regex to filter classes which are fully deobfuscated already"));
+		add(excludedB, 1, 5, 2, 1);
+
+
+		add(new Label("Fix simple inner classes:"), 0, 6);
+
+		HBox hBox = new HBox(GuiConstants.padding * 4);
 
 		CheckBox checkA = new CheckBox("A (left)");
 		hBox.getChildren().add(checkA);
@@ -219,10 +176,43 @@ public class ExportJarPane extends GridPane {
 		});
 		add(hBox, 1, 6, 2, 1);
 
+
+		add(new Label("Fix all inner classes:"), 0, 7);
+
+		hBox = new HBox(GuiConstants.padding * 4);
+
+		CheckBox checkA2 = new CheckBox("A (left)");
+		hBox.getChildren().add(checkA2);
+
+		CheckBox checkB2 = new CheckBox("B (right)");
+		hBox.getChildren().add(checkB2);
+
+		checkA2.selectedProperty().addListener((observable, was, now) -> {
+			if (now) {
+				innerFixes |= 0x04;
+				checkA.setSelected(true);
+				checkA.setDisable(true);
+			} else {
+				innerFixes &= ~0x04;
+				checkA.setDisable(false);
+			}
+		});
+		checkB2.selectedProperty().addListener((observable, was, now) -> {
+			if (now) {
+				innerFixes |= 0x08;
+				checkB.setSelected(true);
+				checkB.setDisable(true);
+			} else {
+				innerFixes &= ~0x08;
+				checkB.setDisable(false);
+			}
+		});
+		add(hBox, 1, 7, 2, 1);
+
 		onConfigurationChange();
 	}
 
-	private static List<ExtensionFilter> jarExtensionFilter() {
+	static List<ExtensionFilter> jarExtensionFilter() {
 		return Collections.singletonList(new ExtensionFilter("Java archive", "*.jar"));
 	}
 
@@ -231,7 +221,7 @@ public class ExportJarPane extends GridPane {
 	}
 
 	void onConfigurationChange() {
-		boolean valid = mergedJar != null && mappings != null && mappingType != null && (!applyArgo || argoJar != null);
+		boolean valid = mergedJar != null && mappings != null && mappingType != null;
 		okButton.setDisable(!valid);
 	}
 
@@ -266,21 +256,28 @@ public class ExportJarPane extends GridPane {
 		return !isServerA();
 	}
 
-	public boolean shouldFixArgo() {
-		return applyArgo;
+	public String excludedA() {
+		return excludedA.getText();
 	}
 
-	public Path getArgoJar() {
-		assert shouldFixArgo();
-		return argoJar;
+	public String excludedB() {
+		return excludedB.getText();
 	}
 
-	public boolean shouldFixInners() {
+	public boolean shouldFixAnyInners() {
 		return innerFixes != 0;
 	}
 
-	public byte sidesToApply() {
-		assert shouldFixInners();
-		return innerFixes;
+	public boolean shouldFixSimpleInners() {
+		return (innerFixes & 0x3) != 0;
+	}
+
+	public boolean shouldFixAllInners() {
+		return (innerFixes & 0xC) != 0;
+	}
+
+	public Side sidesToApply() {
+		assert shouldFixAnyInners();
+		return Side.values()[innerFixes - 1 & 0x3];
 	}
 }
