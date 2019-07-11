@@ -20,6 +20,7 @@ import javafx.scene.layout.HBox;
 import javafx.stage.FileChooser.ExtensionFilter;
 import javafx.stage.Window;
 
+import matcher.config.Config;
 import matcher.gui.Gui;
 import matcher.gui.Gui.SelectedFile;
 import matcher.gui.GuiConstants;
@@ -136,7 +137,7 @@ public class ExportJarPane extends GridPane {
 
 		add(new Label("A side deobf'd classes:"), 0, 4);
 
-		excludedA = new TextField();
+		excludedA = new TextField(Config.getProjectConfig().getNonObfuscatedClassPatternA());
 		excludedA.setPrefWidth(320);
 		excludedA.setTooltip(new Tooltip("Regex to filter classes which are fully deobfuscated already"));
 		add(excludedA, 1, 4, 2, 1);
@@ -144,7 +145,7 @@ public class ExportJarPane extends GridPane {
 
 		add(new Label("B side deobf'd classes:"), 0, 5);
 
-		excludedB = new TextField();
+		excludedB = new TextField(Config.getProjectConfig().getNonObfuscatedClassPatternB());
 		excludedB.setPrefWidth(320);
 		excludedB.setTooltip(new Tooltip("Regex to filter classes which are fully deobfuscated already"));
 		add(excludedB, 1, 5, 2, 1);
