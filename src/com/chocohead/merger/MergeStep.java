@@ -408,7 +408,7 @@ public enum MergeStep {
 							AbstractInsnNode insnA = methodIns.get(insn);
 							AbstractInsnNode insnB = matchedIns.get(insn);
 							assert insnA.getType() == insnB.getType(): "Mismatch between " + method + " and " + matchMethod + ' ' + insn + " in: " + insnA + " vs " + insnB;
-							assert insnA.getOpcode() == insnB.getOpcode();
+							assert insnA.getOpcode() == insnB.getOpcode(): "Mismatch between " + method + " and " + matchMethod + ' ' + insn + " in: " + insnA + " vs " + insnB;
 
 							if (insnA.getType() == AbstractInsnNode.LINE) {
 								seenLines++;

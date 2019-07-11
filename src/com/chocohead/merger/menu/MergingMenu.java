@@ -116,7 +116,7 @@ public class MergingMenu extends Menu {
 						AbstractInsnNode insnA = methodIns.get(insn);
 						AbstractInsnNode insnB = matchedIns.get(insn);
 						assert insnA.getType() == insnB.getType(): "Mismatch between " + method + " and " + match + ' ' + insn + " in: " + insnA + " vs " + insnB;
-						assert insnA.getOpcode() == insnB.getOpcode();
+						assert insnA.getOpcode() == insnB.getOpcode(): "Mismatch between " + method + " and " + match + ' ' + insn + " in: " + insnA + " vs " + insnB;
 
 						if (insnA.getType() == AbstractInsnNode.LINE) {
 							if (((LineNumberNode) insnA).line != ((LineNumberNode) insnB).line)  {
