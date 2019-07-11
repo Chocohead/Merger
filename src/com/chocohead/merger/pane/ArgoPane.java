@@ -36,7 +36,6 @@ public class ArgoPane extends GridPane {
 		argoJarLabel.setEditable(false);
 		argoJarLabel.setMouseTransparent(true);
 		argoJarLabel.setFocusTraversable(false);
-		argoJarLabel.setDisable(true);
 		add(argoJarLabel, 1, 1);
 
 		Button argoButton = new Button("Select");

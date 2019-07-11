@@ -48,6 +48,7 @@ import matcher.type.MemberInstance;
 import matcher.type.MethodInstance;
 
 import com.chocohead.merger.MergeStep;
+import com.chocohead.merger.QueuingIterator;
 import com.chocohead.merger.TripleClassEnvironment;
 import com.chocohead.merger.mappings.TinyWriter;
 import com.chocohead.merger.pane.ArgoConfirmPane;
@@ -468,32 +469,30 @@ public class MergedJaringMenu extends Menu {
 			gui.runProgressTask("Matching in library", progress -> {
 				env.init(Collections.singletonList(export.getArgoJar()), Collections.emptyList(), Config.getProjectConfig(), progress);
 
-				for (MergeStep step : MergeStep.values()) {
-					long previousUnmatched = env.getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && !cls.hasMatch()).count();
-
-					step.run(thirdWay, progress::accept);
-
-					long unmatched = env.getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && !cls.hasMatch()).count();
-					System.out.println("Matched " + Math.abs(previousUnmatched - unmatched) + " classes (" + unmatched + " left unmatched, " + env.getClassesA().size() + " total)");
-				}
+				QueuingIterator<MergeStep> task = new QueuingIterator<>(MergeStep.values(), MergeStep.UsageMatch);
+				Set<ClassInstance> classesToDo = env.getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated()).collect(Collectors.toCollection(Util::newIdentityHashSet));
 
 				long matched = 0;
 				do {
-					Set<ClassInstance> previousUnmatchedClasses = env.getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && !cls.hasMatch()).collect(Collectors.toCollection(Util::newIdentityHashSet));
+					Set<ClassInstance> previousUnmatchedClasses = classesToDo.stream().filter(cls -> !cls.hasMatch()).collect(Collectors.toCollection(Util::newIdentityHashSet));
 					long previousUnmatchedMethods = previousUnmatchedClasses.stream().flatMap(cls -> Arrays.stream(cls.getMethods())).filter(method -> !method.hasMatch()).count();
 					long previousUnmatchedFields = previousUnmatchedClasses.stream().flatMap(cls -> Arrays.stream(cls.getFields())).filter(method -> !method.hasMatch()).count();
 
-					MergeStep.UsageMatch.run(thirdWay, progress::accept);
+					assert task.hasNext();
+					task.next().run(thirdWay, progress::accept);
 
-					Set<ClassInstance> unmatchedClasses = env.getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && !cls.hasMatch()).collect(Collectors.toCollection(Util::newIdentityHashSet));
+					Set<ClassInstance> unmatchedClasses = classesToDo.stream().filter(cls -> !cls.hasMatch()).collect(Collectors.toCollection(Util::newIdentityHashSet));
 					long unmatchedMethods = unmatchedClasses.stream().flatMap(cls -> Arrays.stream(cls.getMethods())).filter(method -> !method.hasMatch()).count();
 					long unmatchedFields = unmatchedClasses.stream().flatMap(cls -> Arrays.stream(cls.getFields())).filter(method -> !method.hasMatch()).count();
 
 					matched = Math.abs(previousUnmatchedClasses.size() - unmatchedClasses.size()) + Math.abs(previousUnmatchedMethods - unmatchedMethods) + Math.abs(previousUnmatchedFields - unmatchedFields);
-					System.out.println("Matched " + (unmatchedClasses.size() - previousUnmatchedClasses.size()) + " classes (" + unmatchedClasses.size() + " left unmatched, " + env.getClassesA().size() + " total)");
-				} while (matched > 0);
+					System.out.printf("Matching left %d/%d classes (%+d), %d/%d methods (%+d) and %d/%d fields (%+d) unmatched%n",
+							unmatchedClasses.size(), classesToDo.size(), unmatchedClasses.size() - previousUnmatchedClasses.size(),
+							unmatchedMethods, classesToDo.stream().flatMap(cls -> Arrays.stream(cls.getMethods())).count(), unmatchedMethods - previousUnmatchedMethods,
+							unmatchedFields, classesToDo.stream().flatMap(cls -> Arrays.stream(cls.getFields())).count(), unmatchedFields - previousUnmatchedFields);
+				} while (matched > 0 || task.keepGoing());
 
-				Map<Boolean, List<ClassInstance>> pool = env.getClassesA().stream().filter(cls -> cls.getUri() != null).collect(Collectors.groupingBy(ClassInstance::hasMatch));
+				Map<Boolean, List<ClassInstance>> pool = classesToDo.stream().collect(Collectors.groupingBy(ClassInstance::hasMatch));
 
 				List<ClassInstance> matches = pool.get(Boolean.TRUE);
 				assert !matches.contains(null);
@@ -501,7 +500,7 @@ public class MergedJaringMenu extends Menu {
 
 				System.out.println("Matched: " + matches.size() + " out of " + env.getClassesA().size());
 				for (ClassInstance match : matches) {
-					System.out.println("\t" + match.getMatch().getName() + " => " + match.getName());
+					System.out.println('\t' + match.getMatch().getName() + " => " + match.getName());
 				}
 
 				List<ClassInstance> misses = pool.get(Boolean.FALSE);
