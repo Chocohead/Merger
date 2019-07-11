@@ -1,6 +1,12 @@
 package com.chocohead.merger;
 
+import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.function.Predicate;
+
 import org.objectweb.asm.Handle;
+import org.objectweb.asm.Label;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -10,6 +16,7 @@ import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.IntInsnNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
+import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.LookupSwitchInsnNode;
@@ -31,8 +38,8 @@ public class MethodCloseness {
 	public static boolean isCloseEnough(MethodInstance a, MethodInstance b) {
 		if (!a.isReal() || !b.isReal()) return false;
 
-		InsnList ilA = a.getAsmNode().instructions;
-		InsnList ilB = b.getAsmNode().instructions;
+		InsnList ilA = cloneWithoutFrames(a.getAsmNode().instructions);
+		InsnList ilB = cloneWithoutFrames(b.getAsmNode().instructions);
 		if (ilA.size() != ilB.size()) return false;
 
 		for (int i = 0; i < ilA.size(); i++) {
@@ -43,8 +50,44 @@ public class MethodCloseness {
 			}
 		}
 
-		assert ClassifierUtil.compareInsns(a, b) >= 1 - 1e-6;
+		assert ilA.size() != a.getAsmNode().instructions.size() || ilB.size() != b.getAsmNode().instructions.size() || ClassifierUtil.compareInsns(a, b) >= 1 - 1e-6;
 		return true;
+	}
+
+	public static InsnList cloneWithoutFrames(InsnList list) {
+		return clone(list, insn -> insn.getType() != AbstractInsnNode.FRAME && insn.getType() != AbstractInsnNode.LABEL);
+	}
+
+	private static InsnList clone(InsnList list, Predicate<AbstractInsnNode> filter) {
+		Map<LabelNode, LabelNode> clonedLabels = new IdentityHashMap<>();
+		Map<Label, Label> trueLabels = new IdentityHashMap<>();
+
+		boolean seenFrame = false;
+		for (Iterator<AbstractInsnNode> it = list.iterator(); it.hasNext();) {
+			AbstractInsnNode insn = it.next();
+
+			switch (insn.getType()) {
+			case AbstractInsnNode.LABEL:
+				LabelNode node = (LabelNode) insn;
+
+				clonedLabels.put(node, new LabelNode(trueLabels.computeIfAbsent(node.getLabel(), k -> new Label())));
+				break;
+
+			case AbstractInsnNode.FRAME:
+				seenFrame = true;
+				break;
+			}
+		}
+		if (!seenFrame && clonedLabels.isEmpty()) return list; //Only clone the list if we have to
+
+		InsnList out = new InsnList();
+		for (Iterator<AbstractInsnNode> it = list.iterator(); it.hasNext();) {
+			AbstractInsnNode insn = it.next();
+
+			if (filter.test(insn)) out.add(insn.clone(clonedLabels));
+		}
+
+		return out;
 	}
 
 	private static boolean instructionsMatch(AbstractInsnNode insnA, AbstractInsnNode insnB, InsnList listA, InsnList listB, MethodInstance mthA, MethodInstance mthB, ClassEnvironment env) {

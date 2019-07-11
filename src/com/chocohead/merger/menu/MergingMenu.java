@@ -27,6 +27,7 @@ import matcher.type.MatchType;
 import matcher.type.MethodInstance;
 
 import com.chocohead.merger.MergeStep;
+import com.chocohead.merger.MethodCloseness;
 
 public class MergingMenu extends Menu {
 	public static class MergeSettings {
@@ -104,8 +105,8 @@ public class MergingMenu extends Menu {
 					MethodInstance match = method.getMatch();
 					assert match.isReal();
 
-					InsnList methodIns = method.getAsmNode().instructions;
-					InsnList matchedIns = match.getAsmNode().instructions;
+					InsnList methodIns = MethodCloseness.cloneWithoutFrames(method.getAsmNode().instructions);
+					InsnList matchedIns = MethodCloseness.cloneWithoutFrames(match.getAsmNode().instructions);
 
 					if (methodIns.size() != matchedIns.size()) {
 						mismatches.add(method);

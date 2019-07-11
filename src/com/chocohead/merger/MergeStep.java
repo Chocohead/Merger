@@ -92,14 +92,13 @@ public enum MergeStep {
 					//The matched method should certainly exist too
 					assert matched.isReal();
 
-					InsnList methodIns = method.getAsmNode().instructions;
-					InsnList matchedIns = matched.getAsmNode().instructions;
-
-					//assert ClassifierUtil.compareInsns(methodIns, matchedIns, env) > 0.99;
 					if (!MethodCloseness.isCloseEnough(method, matched)) {
 						System.out.println("Unexpected method contents mismatch in " + cls.getName() + '#' + method.getName() + method.getDesc() + ", only matched with " + ClassifierUtil.compareInsns(method, matched));
 						continue;
 					}
+
+					InsnList methodIns = MethodCloseness.cloneWithoutFrames(method.getAsmNode().instructions);
+					InsnList matchedIns = MethodCloseness.cloneWithoutFrames(matched.getAsmNode().instructions);
 					assert methodIns.size() == matchedIns.size();
 
 					MethodVarInstance[] methodArgs = method.getArgs();
@@ -300,8 +299,8 @@ public enum MergeStep {
 					MethodVarInstance[] matchedArgs = matched.getArgs();
 					assert methodArgs.length == matchedArgs.length;
 
-					InsnList methodIns = method.getAsmNode().instructions;
-					InsnList matchedIns = matched.getAsmNode().instructions;
+					InsnList methodIns = MethodCloseness.cloneWithoutFrames(method.getAsmNode().instructions);
+					InsnList matchedIns = MethodCloseness.cloneWithoutFrames(matched.getAsmNode().instructions);
 					assert methodIns.size() == matchedIns.size();
 				}
 			}, progress::accept);
@@ -390,7 +389,7 @@ public enum MergeStep {
 
 				on: for (MethodInstance method : system.methods) {
 					MethodVarInstance[] methodArgs = method.getArgs();
-					InsnList methodIns = method.getAsmNode().instructions;
+					InsnList methodIns = MethodCloseness.cloneWithoutFrames(method.getAsmNode().instructions);
 
 					off: for (int i = end; i < system.matchMethods.size(); i++) {
 						MethodInstance matchMethod = system.matchMethods.get(i);
@@ -400,7 +399,7 @@ public enum MergeStep {
 						if (returnType.hasMatch() && returnType.getMatch() != method.getRetType()) continue;
 						if (method.getRetType().hasMatch() && method.getRetType().getMatch() != returnType) continue;
 
-						InsnList matchedIns = matchMethod.getAsmNode().instructions;
+						InsnList matchedIns = MethodCloseness.cloneWithoutFrames(matchMethod.getAsmNode().instructions);
 						if (methodIns.size() != matchedIns.size()) continue;
 
 						int seenLines = 0;
