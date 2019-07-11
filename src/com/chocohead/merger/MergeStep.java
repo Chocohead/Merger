@@ -32,16 +32,16 @@ import matcher.type.MethodVarInstance;
 public enum MergeStep {
 	AutoMatch("Apply auto-match") {
 		@Override
-		public void run(Gui gui, DoubleConsumer progress) {
-			//gui.getMatcher().autoMatchClasses(progress);
+		protected void run(Matcher matcher, ClassEnvironment env, DoubleConsumer progress) {
+			//matcher.autoMatchClasses(progress);
 			//Auto-merging everything makes the latter processes easier
-			gui.getMatcher().autoMatchAll(progress);
+			matcher.autoMatchAll(progress);
 		}
 	},
 	MatchFix("Apply auto-match fix") {
 		@Override
-		public void run(Gui gui, DoubleConsumer progress) {
-			List<ClassInstance> classes = gui.getEnv().getClassesA().stream()
+		protected void run(Matcher matcher, ClassEnvironment env, DoubleConsumer progress) {
+			List<ClassInstance> classes = env.getClassesA().stream()
 					.filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && cls.hasMatch() && !cls.isFullyMatched(false))
 					.collect(Collectors.toList());
 			Queue<ClassInstance> mismatches = new ConcurrentLinkedQueue<>();
@@ -63,14 +63,14 @@ public enum MergeStep {
 
 			//Unmatch everything that we've decided is incorrectly matched
 			if (!mismatches.isEmpty()) {
-				mismatches.forEach(gui.getMatcher()::unmatch);
+				mismatches.forEach(matcher::unmatch);
 			}
 		}
 	},
 	UsageMatch("Match by class usage") {
 		@Override
-		public void run(Gui gui, DoubleConsumer progress) {
-			List<ClassInstance> classes = gui.getEnv().getClassesA().stream()
+		protected void run(Matcher matcher, ClassEnvironment env, DoubleConsumer progress) {
+			List<ClassInstance> classes = env.getClassesA().stream()
 					.filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && cls.hasMatch() /*&& cls.isFullyMatched(false)*/)
 					.collect(Collectors.toList());
 			Map<ClassInstance, ClassInstance> matches = new ConcurrentHashMap<>(classes.size());
@@ -78,8 +78,6 @@ public enum MergeStep {
 			Map<FieldInstance, FieldInstance> fieldMatches = new ConcurrentHashMap<>(classes.size());
 
 			Matcher.runInParallel(classes, cls -> {
-				ClassEnvironment env = gui.getEnv();
-
 				for (MethodInstance method : cls.getMethods()) {
 					//Make sure we've only matching methods that really exist
 					if (!method.isReal()) continue;
@@ -263,20 +261,20 @@ public enum MergeStep {
 			Matcher.sanitizeMatches(fieldMatches);
 
 			for (Map.Entry<ClassInstance, ClassInstance> entry : matches.entrySet()) {
-				gui.getMatcher().match(entry.getKey(), entry.getValue());
+				matcher.match(entry.getKey(), entry.getValue());
 			}
 			for (Map.Entry<MethodInstance, MethodInstance> entry : methodMatches.entrySet()) {
-				gui.getMatcher().match(entry.getKey(), entry.getValue());
+				matcher.match(entry.getKey(), entry.getValue());
 			}
 			for (Map.Entry<FieldInstance, FieldInstance> entry : fieldMatches.entrySet()) {
-				gui.getMatcher().match(entry.getKey(), entry.getValue());
+				matcher.match(entry.getKey(), entry.getValue());
 			}
 		}
 	},
 	DetachWrongMethods("Apply mismatched method fix") {
 		@Override
-		public void run(Gui gui, DoubleConsumer progress) {
-			List<ClassInstance> classes = gui.getEnv().getClassesA().stream()
+		protected void run(Matcher matcher, ClassEnvironment env, DoubleConsumer progress) {
+			List<ClassInstance> classes = env.getClassesA().stream()
 					.filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && cls.hasMatch())
 					.collect(Collectors.toList());
 			Queue<MethodInstance> mismatches = new ConcurrentLinkedQueue<>();
@@ -306,14 +304,14 @@ public enum MergeStep {
 			}, progress::accept);
 
 			if (!mismatches.isEmpty()) {
-				mismatches.forEach(gui.getMatcher()::unmatch);
+				mismatches.forEach(matcher::unmatch);
 			}
 		}
 	},
 	LineNumberMatch("Match by line numbers") {
 		@Override
-		public void run(Gui gui, DoubleConsumer progress) {
-			List<ClassInstance> classes = gui.getEnv().getClassesA().stream()
+		protected void run(Matcher matcher, ClassEnvironment env, DoubleConsumer progress) {
+			List<ClassInstance> classes = env.getClassesA().stream()
 					.filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && cls.hasMatch() && !cls.isFullyMatched(false) && cls.getMethods().length > 0)
 					.collect(Collectors.toList());
 			Map<ClassInstance, ClassInstance> typeMatches = new ConcurrentHashMap<>();
@@ -328,10 +326,10 @@ public enum MergeStep {
 			Matcher.sanitizeMatches(matches);
 
 			if (!typeMatches.isEmpty()) {
-				typeMatches.forEach(gui.getMatcher()::match);
+				typeMatches.forEach(matcher::match);
 			}
 			if (!matches.isEmpty()) {
-				matches.forEach(gui.getMatcher()::match);
+				matches.forEach(matcher::match);
 			}
 		}
 
@@ -443,8 +441,8 @@ public enum MergeStep {
 	},
 	HeirachyMethodMatch("Match by method ownership") {
 		@Override
-		public void run(Gui gui, DoubleConsumer progress) {
-			List<ClassInstance> classes = gui.getEnv().getClassesA().stream()
+		protected void run(Matcher matcher, ClassEnvironment env, DoubleConsumer progress) {
+			List<ClassInstance> classes = env.getClassesA().stream()
 					.filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && cls.hasMatch() && cls.getMethods().length > 0)
 					.collect(Collectors.toList());
 			Map<ClassInstance, ClassInstance> matches = new ConcurrentHashMap<>();
@@ -480,7 +478,7 @@ public enum MergeStep {
 			Matcher.sanitizeMatches(matches);
 
 			if (!matches.isEmpty()) {
-				matches.forEach(gui.getMatcher()::match);
+				matches.forEach(matcher::match);
 			}
 		}
 	};
@@ -491,5 +489,13 @@ public enum MergeStep {
 		this.name = name;
 	}
 
-	public abstract void run(Gui gui, DoubleConsumer progress);
+	public void run(Gui gui, DoubleConsumer progress) {
+		run(gui.getMatcher(), gui.getEnv(), progress);
+	}
+
+	public void run(Matcher matcher, DoubleConsumer progress) {
+		run(matcher, matcher.getEnv(), progress);
+	}
+
+	protected abstract void run(Matcher matcher, ClassEnvironment env, DoubleConsumer progress);
 }
