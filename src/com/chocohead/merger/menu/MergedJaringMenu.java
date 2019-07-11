@@ -2,14 +2,17 @@ package com.chocohead.merger.menu;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.DoubleConsumer;
@@ -20,6 +23,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Alert.AlertType;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Dialog;
@@ -29,10 +33,12 @@ import javafx.scene.control.SeparatorMenuItem;
 import net.fabricmc.stitch.merge.JarMerger;
 
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.InnerClassNode;
 
 import matcher.Matcher;
 import matcher.NameType;
 import matcher.Util;
+import matcher.config.Config;
 import matcher.gui.Gui;
 import matcher.type.ClassEnvironment;
 import matcher.type.ClassInstance;
@@ -41,8 +47,13 @@ import matcher.type.InputFile;
 import matcher.type.MemberInstance;
 import matcher.type.MethodInstance;
 
+import com.chocohead.merger.MergeStep;
+import com.chocohead.merger.TripleClassEnvironment;
 import com.chocohead.merger.mappings.TinyWriter;
+import com.chocohead.merger.pane.ArgoConfirmPane;
+import com.chocohead.merger.pane.ArgoPane;
 import com.chocohead.merger.pane.ExportJarPane;
+import com.chocohead.merger.pane.ExportJarPane.Side;
 import com.chocohead.merger.pane.ExportJarPane.Type;
 
 public class MergedJaringMenu extends Menu {
@@ -60,7 +71,7 @@ public class MergedJaringMenu extends Menu {
 		getItems().add(new SeparatorMenuItem());
 
 		item = new MenuItem("Filter Argo");
-		item.setOnAction(event -> gui.showAlert(AlertType.INFORMATION, "Filtering out Argo types", "TODO", "//Allow picking side to apply on"));
+		item.setOnAction(event -> mergeArgo(gui));
 		getItems().add(item);
 
 		item = new MenuItem("Find inner classes");
@@ -433,6 +444,142 @@ public class MergedJaringMenu extends Menu {
 
 			progress.accept(progressAmount++ / toDo);
 		}
+	}
+
+	private static void mergeArgo(Gui gui) {
+		Dialog<ArgoPane> dialog = new Dialog<>();
+		dialog.setResizable(true);
+		dialog.setTitle("Library matching configuration");
+		dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+
+		Node okButton = dialog.getDialogPane().lookupButton(ButtonType.OK);
+		ArgoPane content = new ArgoPane(dialog.getOwner(), okButton);
+
+		dialog.getDialogPane().setContent(content);
+		dialog.setResultConverter(button -> button == ButtonType.OK ? content : null);
+
+		dialog.showAndWait().ifPresent(export -> {
+			assert export != null;
+			assert export.isValid();
+
+			TripleClassEnvironment env = new TripleClassEnvironment(gui.getEnv(), export.getTargetSide() == Side.A);
+			Matcher thirdWay = new Matcher(env);
+
+			gui.runProgressTask("Matching in library", progress -> {
+				env.init(Collections.singletonList(export.getArgoJar()), Collections.emptyList(), Config.getProjectConfig(), progress);
+
+				for (MergeStep step : MergeStep.values()) {
+					long previousUnmatched = env.getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && !cls.hasMatch()).count();
+
+					step.run(thirdWay, progress::accept);
+
+					long unmatched = env.getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && !cls.hasMatch()).count();
+					System.out.println("Matched " + Math.abs(previousUnmatched - unmatched) + " classes (" + unmatched + " left unmatched, " + env.getClassesA().size() + " total)");
+				}
+
+				long matched = 0;
+				do {
+					Set<ClassInstance> previousUnmatchedClasses = env.getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && !cls.hasMatch()).collect(Collectors.toCollection(Util::newIdentityHashSet));
+					long previousUnmatchedMethods = previousUnmatchedClasses.stream().flatMap(cls -> Arrays.stream(cls.getMethods())).filter(method -> !method.hasMatch()).count();
+					long previousUnmatchedFields = previousUnmatchedClasses.stream().flatMap(cls -> Arrays.stream(cls.getFields())).filter(method -> !method.hasMatch()).count();
+
+					MergeStep.UsageMatch.run(thirdWay, progress::accept);
+
+					Set<ClassInstance> unmatchedClasses = env.getClassesA().stream().filter(cls -> cls.getUri() != null && cls.isNameObfuscated() && !cls.hasMatch()).collect(Collectors.toCollection(Util::newIdentityHashSet));
+					long unmatchedMethods = unmatchedClasses.stream().flatMap(cls -> Arrays.stream(cls.getMethods())).filter(method -> !method.hasMatch()).count();
+					long unmatchedFields = unmatchedClasses.stream().flatMap(cls -> Arrays.stream(cls.getFields())).filter(method -> !method.hasMatch()).count();
+
+					matched = Math.abs(previousUnmatchedClasses.size() - unmatchedClasses.size()) + Math.abs(previousUnmatchedMethods - unmatchedMethods) + Math.abs(previousUnmatchedFields - unmatchedFields);
+					System.out.println("Matched " + (unmatchedClasses.size() - previousUnmatchedClasses.size()) + " classes (" + unmatchedClasses.size() + " left unmatched, " + env.getClassesA().size() + " total)");
+				} while (matched > 0);
+
+				Map<Boolean, List<ClassInstance>> pool = env.getClassesA().stream().filter(cls -> cls.getUri() != null).collect(Collectors.groupingBy(ClassInstance::hasMatch));
+
+				List<ClassInstance> matches = pool.get(Boolean.TRUE);
+				assert !matches.contains(null);
+				matches.sort(Comparator.comparing(cls -> cls.getMatch().getName()));
+
+				System.out.println("Matched: " + matches.size() + " out of " + env.getClassesA().size());
+				for (ClassInstance match : matches) {
+					System.out.println("\t" + match.getMatch().getName() + " => " + match.getName());
+				}
+
+				List<ClassInstance> misses = pool.get(Boolean.FALSE);
+				assert !misses.contains(null);
+
+				System.out.println("\nMissed: " + misses.size());
+				for (ClassInstance miss : misses) {
+					System.out.println('\t' + miss.getName());
+				}
+			}, () -> {
+				Alert alert = new ArgoConfirmPane(env);
+
+				if (alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK) {
+					gui.runProgressTask("Renaming classes", progress -> {
+						int done = 0;
+						double toDo = env.getClassesA().size();
+
+						for (ClassInstance cls : env.getClassesA()) {
+							progress.accept(done++ / toDo);
+							if (cls.getUri() == null || !cls.hasMatch()) continue;
+
+							ClassInstance match = cls.getMatch();
+
+							String name = cls.getName();
+							int split;
+							if ((split = name.indexOf('$')) > 0) {
+								String outerName = name.substring(0, split);
+								name = name.substring(split + 1);
+
+								ClassInstance outer = env.getClsByNameA(outerName);
+								assert outer != null && outer.hasMatch();
+
+								if (outer.getMatch().getChildClasses().add(match)) {
+									//Outer didn't know we were one of its children, time to update the node
+									assert !name.contains("/");
+									assert outerName.contains("/");
+									outer.getMergedAsmNode().innerClasses.add(new InnerClassNode(ClassInstance.getNestedName(outerName, name), outerName, name, cls.getAccess()));
+								}
+
+								if (match.getOuterClass() != outer) {
+									match.getMergedAsmNode().outerClass = outer.getName();
+									try {
+										Field f = ClassInstance.class.getDeclaredField("outerClass");
+										f.setAccessible(true);
+										f.set(match, outer);
+									} catch (ReflectiveOperationException e) {
+										throw new RuntimeException("Error setting outerClass field", e);
+									}
+								}
+							}
+							match.setMappedName(name);
+
+							for (MethodInstance method : cls.getMethods()) {
+								if (!method.isReal() || !method.hasMatch()) continue;
+
+								method.getMatch().setMappedName(method.getName());
+							}
+
+							for (FieldInstance field : cls.getFields()) {
+								if (!field.isReal() || !field.hasMatch()) continue;
+
+								field.getMatch().setMappedName(field.getName());
+							}
+						}
+
+						//Could unmatch things as we go, but this avoids any accidents later if the nature of Matcher#unmatch changes
+						for (ClassInstance cls : env.getClassesA()) {
+							if (cls.getUri() != null && cls.hasMatch()) {
+								thirdWay.unmatch(cls); //Clean up once things are mapped otherwise things will trip up later
+								assert !cls.hasMatch();
+							}
+						}
+
+						progress.accept(1);
+					}, () -> {}, Throwable::printStackTrace);
+				}
+			}, Throwable::printStackTrace);
+		});
 	}
 
 	private static class ClassSystem {
