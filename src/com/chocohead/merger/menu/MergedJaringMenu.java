@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -46,6 +47,7 @@ import matcher.type.FieldInstance;
 import matcher.type.InputFile;
 import matcher.type.MemberInstance;
 import matcher.type.MethodInstance;
+import matcher.type.MethodVarInstance;
 
 import com.chocohead.merger.MergeStep;
 import com.chocohead.merger.QueuingIterator;
@@ -75,8 +77,16 @@ public class MergedJaringMenu extends Menu {
 		item.setOnAction(event -> mergeArgo(gui));
 		getItems().add(item);
 
-		item = new MenuItem("Find inner classes");
+		item = new MenuItem("Find inner/nested classes");
 		item.setOnAction(event -> gui.runProgressTask("Finding likely nested inner classes...", progress -> findInnerClasses(gui, progress), () -> {}, Throwable::printStackTrace));
+		getItems().add(item);
+
+		item = new MenuItem("Fix simple inner classes");
+		item.setOnAction(event -> gui.runProgressTask("Fixing simple inner classes...", progress -> fixSimpleInners(gui, Side.BOTH, progress), () -> {}, Throwable::printStackTrace));
+		getItems().add(item);
+
+		item = new MenuItem("Run nested class wizard");
+		item.setOnAction(event -> gui.showAlert(AlertType.INFORMATION, "Information", "Information", "The nested class wizard is still WIP"));
 		getItems().add(item);
 	}
 
@@ -98,10 +108,11 @@ public class MergedJaringMenu extends Menu {
 
 			if (export.shouldFixAnyInners()) {
 				if (export.shouldFixSimpleInners()) {
+					gui.runProgressTask("Fixing simple inner classes...", progress -> fixSimpleInners(gui, export.sidesToApply(), progress), () -> {}, Throwable::printStackTrace);
 				}
 
 				if (export.shouldFixAllInners()) {
-					gui.showAlert(AlertType.INFORMATION, "Information", "Information", "The inner class wizard is still WIP");
+					gui.showAlert(AlertType.INFORMATION, "Information", "Information", "The nested class wizard is still WIP");
 				}
 			}
 
@@ -533,23 +544,7 @@ public class MergedJaringMenu extends Menu {
 								ClassInstance outer = env.getClsByNameA(outerName);
 								assert outer != null && outer.hasMatch();
 
-								if (outer.getMatch().getChildClasses().add(match)) {
-									//Outer didn't know we were one of its children, time to update the node
-									assert !name.contains("/");
-									assert outerName.contains("/");
-									outer.getMergedAsmNode().innerClasses.add(new InnerClassNode(ClassInstance.getNestedName(outerName, name), outerName, name, cls.getAccess()));
-								}
-
-								if (match.getOuterClass() != outer) {
-									match.getMergedAsmNode().outerClass = outer.getName();
-									try {
-										Field f = ClassInstance.class.getDeclaredField("outerClass");
-										f.setAccessible(true);
-										f.set(match, outer);
-									} catch (ReflectiveOperationException e) {
-										throw new RuntimeException("Error setting outerClass field", e);
-									}
-								}
+								enforceHierarchy(outer.getMatch(), match);
 							}
 							match.setMappedName(name);
 
@@ -579,6 +574,29 @@ public class MergedJaringMenu extends Menu {
 				}
 			}, Throwable::printStackTrace);
 		});
+	}
+
+	private static void enforceHierarchy(ClassInstance outer, ClassInstance inner) {
+		if (outer.getChildClasses().add(inner)) {
+			//Outer didn't know we were one of its children, time to update the node
+			String outerName = outer.getName();
+			String name = ClassInstance.getInnerName(inner.getName());
+
+			assert !name.contains("/");
+			assert outer.getMergedAsmNode() != null: "Asmless outer class: " + outer + " for " + inner;
+			outer.getMergedAsmNode().innerClasses.add(new InnerClassNode(ClassInstance.getNestedName(outerName, name), outerName, name, inner.getAccess()));
+		}
+
+		if (inner.getOuterClass() != outer) {
+			inner.getMergedAsmNode().outerClass = outer.getName();
+			try {
+				Field f = ClassInstance.class.getDeclaredField("outerClass");
+				f.setAccessible(true);
+				f.set(inner, outer);
+			} catch (ReflectiveOperationException e) {
+				throw new RuntimeException("Error setting outerClass field", e);
+			}
+		}
 	}
 
 	private static class ClassSystem {
@@ -617,8 +635,25 @@ public class MergedJaringMenu extends Menu {
 			}).flatMap(Set::stream).collect(Collectors.toCollection(Util::newIdentityHashSet));
 		}
 
+		public boolean isVacuous() {
+			return classes.isEmpty() || classes.size() == 1 && classes.iterator().next().involvedClasses().size() < 2;
+		}
+
 		public boolean isSimple() {
 			return classes.stream().allMatch(SystemComponent::isInner);
+		}
+
+		public boolean canBeMadeSimple() {
+			return classes.stream().anyMatch(SystemComponent::isInner);
+		}
+
+		public ClassSystem makeSimple() {
+			if (!canBeMadeSimple()) throw new UnsupportedOperationException();
+			if (isSimple()) return this;
+
+			ClassSystem out = new ClassSystem();
+			classes.stream().filter(SystemComponent::isInner).forEach(out.classes::add);
+			return out;
 		}
 	}
 
@@ -636,7 +671,12 @@ public class MergedJaringMenu extends Menu {
 		}
 
 		public boolean isAnonymous() {
-			return isInner() && callsIn.isEmpty();
+			if (!isInner() || !callsIn.isEmpty() || !root.getChildClasses().isEmpty()) return false;
+
+			if (!root.getFieldTypeRefs().isEmpty() || root.getMethodTypeRefs().stream().filter(method -> method.getCls() != root).count() != 1) return false;
+
+			assert root.getSuperClass() != root.getEnv().getClsById("Ljava/lang/Object;") || root.getInterfaces().size() == 1: "Suspicous anonymous class: " + root;
+			return true;
 		}
 
 		public Set<ClassInstance> localIn() {
@@ -656,11 +696,10 @@ public class MergedJaringMenu extends Menu {
 		}
 	}
 
-	private static void findInnerClasses(Gui gui, DoubleConsumer progress) {
-		List<ClassInstance> classes = Stream.concat(gui.getEnv().getClassesA().stream(), gui.getEnv().getClassesB().stream()).filter(cls -> cls.getUri() != null && cls.isNameObfuscated()).collect(Collectors.toList());
+	private static List<ClassSystem> findSystems(Stream<ClassInstance> classes, Predicate<ClassInstance> isAside, DoubleConsumer progress) {
 		List<ClassSystem> systems = new ArrayList<>();
 
-		Matcher.runInParallel(classes, cls -> {
+		Matcher.runInParallel(classes.filter(cls -> cls.getUri() != null && cls.isInput() && cls.isNameObfuscated()).collect(Collectors.toList()), cls -> {
 			if ((cls.getAccess() & Opcodes.ACC_SYNTHETIC) != 0) return; //Synthetic enum switch class
 
 			boolean isNotable = false;
@@ -682,7 +721,7 @@ public class MergedJaringMenu extends Menu {
 					Set<MethodInstance> refsIn = method.getRefsIn();
 
 					if (!refsIn.isEmpty()) {//Will appear unused when method is a bridge override of something else
-						System.out.println("Found likely inner class from " + cls.getName() + '#' + method.getName() + method.getDesc() + " (" + (gui.getEnv().getClassesA().contains(cls) ? "A" : "B") + " side)");
+						System.out.println("Found likely inner class from " + cls.getName() + '#' + method.getName() + method.getDesc() + " (" + (isAside.test(cls) ? "A" : "B") + " side)");
 
 						isNotable = true; //TODO: Grab the sole constructor and flag the difference between captured locals and implicit parent type(s)
 						component.callsIn.addAll(refsIn);
@@ -717,6 +756,12 @@ public class MergedJaringMenu extends Menu {
 			}
 		}, progress::accept);
 
+		return systems;
+	}
+
+	private static void findInnerClasses(Gui gui, DoubleConsumer progress) {
+		List<ClassSystem> systems = findSystems(Stream.concat(gui.getEnv().getClassesA().stream(), gui.getEnv().getClassesB().stream()), gui.getEnv().getClassesA()::contains, progress);
+
 		int i = 0;
 		for (ClassSystem system : systems) {
 			System.out.printf("%n%sSystem %d [%d classes]:%n", system.isSimple() ? "Simple " : "", i++, system.classes.size());
@@ -733,5 +778,79 @@ public class MergedJaringMenu extends Menu {
 				System.out.printf("\tProbably with: %s%n", extra.stream().map(ClassInstance::getName).sorted().collect(Collectors.joining(", ", "[", "]")));
 			}
 		}
+	}
+
+	private static void fixSimpleInners(Gui gui, Side side, DoubleConsumer progress) {
+		Collection<ClassInstance> startingClasses;
+		switch (side) {
+		case A:
+			startingClasses = gui.getEnv().getClassesA();
+			break;
+
+		case B:
+			startingClasses = gui.getEnv().getClassesB();
+			break;
+
+		case BOTH:
+			startingClasses = gui.getEnv().getClasses();
+			break;
+
+		default:
+			throw new IllegalStateException("Unexpected side: " + side);
+		}
+
+		int fixedSystems = 0;
+		Map<ClassInstance, SystemComponent> fixedComponents = new IdentityHashMap<>();
+
+		Map<ClassInstance, Integer> anonymousPool = new IdentityHashMap<>();
+		List<ClassSystem> systems = findSystems(startingClasses.stream().filter(cls -> !cls.hasMappedName()), gui.getEnv().getClassesA()::contains, progress);
+		for (ClassSystem system : systems) {
+			if (!system.isSimple()) {
+				if (!system.canBeMadeSimple()) continue;
+				system = system.makeSimple();
+			}
+
+			if (system.isVacuous()) {
+				System.out.println("Unhelpful (simple) system: " + system);
+				continue;
+			}
+
+			for (SystemComponent component : system.classes) {
+				boolean anonymous = component.isAnonymous();
+
+				ClassInstance outer = null;
+				for (MethodInstance method : component.root.getMethods()) {
+					if ("<init>".equals(method.getName())) {
+						if (anonymous) {
+							Set<MethodInstance> refsIn = method.getRefsIn();
+							assert refsIn.size() == 1: "Found multiple references to " + method + ": " + refsIn;
+
+							assert outer == null;
+							outer = refsIn.iterator().next().getCls();
+						} else {
+							MethodVarInstance[] args = method.getArgs();
+							assert args.length != 0; //A local class needs a reference to the outer class (otherwise it's nested not local)
+
+							if (outer == null) {
+								outer = args[0].getType();
+							} else {
+								assert outer == args[0].getType();
+							}
+						}
+
+					}
+				}
+				assert outer != null; //It must have a constructor somewhere (aside from a few edge cases where they're stripped, but hopefully not for local classes)
+
+				enforceHierarchy(outer, component.root);
+				if (anonymous) component.root.setMappedName(anonymousPool.compute(outer, (key, last) -> last == null ? 1 : last + 1).toString());
+
+				fixedComponents.put(component.root, component);
+			}
+
+			fixedSystems++;
+		}
+
+		System.out.println("Fixed " + fixedComponents.size() + " inner classes from " + fixedSystems + " systems");
 	}
 }

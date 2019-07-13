@@ -178,7 +178,7 @@ public class ExportJarPane extends GridPane {
 		add(hBox, 1, 6, 2, 1);
 
 
-		add(new Label("Fix all inner classes:"), 0, 7);
+		add(new Label("Fix all nested classes:"), 0, 7);
 
 		hBox = new HBox(GuiConstants.padding * 4);
 
