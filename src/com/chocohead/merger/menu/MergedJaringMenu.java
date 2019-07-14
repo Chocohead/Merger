@@ -126,7 +126,15 @@ public class MergedJaringMenu extends Menu {
 	}
 
 	private static void dumpMergedJar(Gui gui, ExportJarPane export, DoubleConsumer progress) {
-		assignGlue(gui, progress);
+		Predicate<ClassInstance> assignSkipper;
+		if (!export.excludedA().isEmpty() || !export.excludedB().isEmpty()) {
+			Predicate<ClassInstance> aSkipper = exluderFor(export.excludedA());
+			Predicate<ClassInstance> bSkipper = exluderFor(export.excludedB());
+			assignSkipper = cls -> (gui.getEnv().getClassesA().contains(cls) == export.isServerA() ? aSkipper : bSkipper).test(cls);
+		} else {
+			assignSkipper = cls -> false;
+		}
+		assignGlue(gui, assignSkipper, progress);
 		exportGlue(gui, export.getMappingsFile(), export.getMappingsType(), export.isServerA(), exluderFor(export.excludedA()), exluderFor(export.excludedB()), progress);
 
 		ClassEnvironment env = gui.getEnv();
@@ -158,7 +166,7 @@ public class MergedJaringMenu extends Menu {
 		return input.hasPath() ? input.path : Paths.get(input.fileName);
 	}
 
-	private static void assignGlue(Gui gui, DoubleConsumer progress) {
+	private static void assignGlue(Gui gui, Predicate<ClassInstance> skipper, DoubleConsumer progress) {
 		int nextClassID = 1;
 		int nextMethodID = 1;
 		int nextFieldID = 1;
@@ -172,6 +180,7 @@ public class MergedJaringMenu extends Menu {
 		double progressAmount = 1;
 		for (ClassInstance cls : classes) {
 			assert cls.isInput();
+			if (skipper.test(cls)) continue;
 
 			if (cls.isNameObfuscated()) {
 				if (cls.hasMatch() && cls.getUid() >= 0) {
@@ -185,7 +194,7 @@ public class MergedJaringMenu extends Menu {
 			}
 
 			for (MethodInstance method : cls.getMethods()) {
-				if (method.isNameObfuscated() && method.getUid() < 0) {
+				if (method.isNameObfuscated() && method.getUid() < 0 && method.getParents().stream().map(MethodInstance::getCls).noneMatch(skipper)) {
 					methods.add(method);
 				}
 			}
@@ -307,14 +316,14 @@ public class MergedJaringMenu extends Menu {
 
 			for (MethodInstance method : cls.getMethods()) {
 				if (method.isNameObfuscated()) {
-					assert method.getUid() >= 0: "Missed UID for " + method;
+					assert method.getUid() >= 0 || method.getParents().stream().map(MethodInstance::getCls).anyMatch(serverFirst ? aSkipper : bSkipper): "Missed UID for " + method;
 					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), serverNamer),
 							method.getName(NameType.PLAIN), method.hasMatch() ? method.getMatch().getName(NameType.PLAIN) : null);
 				}
 			}
 			for (MethodInstance method : cls.getMatch().getMethods()) {
 				if (!method.hasMatch() && method.isNameObfuscated()) {
-					assert method.getUid() >= 0: "Missed UID for " + method + " (class matched to " + cls + ')';
+					assert method.getUid() >= 0 || method.getParents().stream().map(MethodInstance::getCls).anyMatch(serverFirst ? bSkipper : aSkipper): "Missed UID for " + method + " (class matched to " + cls + ')';
 					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), clientNamer), null, method.getName(NameType.PLAIN));
 				}
 			}
@@ -349,7 +358,7 @@ public class MergedJaringMenu extends Menu {
 
 			for (MethodInstance method : cls.getMethods()) {
 				if (method.isNameObfuscated()) {
-					assert method.getUid() >= 0;
+					assert method.getUid() >= 0 || method.getParents().stream().map(MethodInstance::getCls).anyMatch(serverFirst ? aSkipper : bSkipper);
 					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), serverNamer), method.getName(NameType.PLAIN), null);
 				}
 			}
@@ -377,7 +386,7 @@ public class MergedJaringMenu extends Menu {
 
 			for (MethodInstance method : cls.getMethods()) {
 				if (method.isNameObfuscated()) {
-					assert method.getUid() >= 0;
+					assert method.getUid() >= 0 || method.getParents().stream().map(MethodInstance::getCls).anyMatch(serverFirst ? bSkipper : aSkipper);
 					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), clientNamer), null, method.getName(NameType.PLAIN));
 				}
 			}
