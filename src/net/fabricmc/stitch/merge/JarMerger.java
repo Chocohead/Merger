@@ -149,7 +149,7 @@ public class JarMerger implements AutoCloseable {
 
 	private static final ClassMerger CLASS_MERGER = new ClassMerger();
 	private final Function<String, ClassInstance> clientClasses, serverClasses;
-	private final /*StitchUtil.*/FileSystem/*Delegate inputClientFs, inputServerFs,*/ outputFs;
+	private final /*StitchUtil.*/FileSystem/*Delegate*/ inputClientFs, inputServerFs, outputFs;
 	private final Path inputClient, inputServer;
 	private final Map<String, Entry> entriesClient, entriesServer;
 	private final Set<String> entriesAll;
@@ -185,8 +185,8 @@ public class JarMerger implements AutoCloseable {
 		this.clientClasses = clientClasses;
 		this.serverClasses = serverClasses;
 
-		this.inputClient = /*(inputClientFs = StitchUtil.*/getJarFileSystem(inputClient, false)/*).get()*/.getPath("/");
-		this.inputServer = /*(inputServerFs = StitchUtil.*/getJarFileSystem(inputServer, false)/*).get()*/.getPath("/");
+		this.inputClient = (inputClientFs = /*StitchUtil.*/getJarFileSystem(inputClient, false))/*.get()*/.getPath("/");
+		this.inputServer = (inputServerFs = /*StitchUtil.*/getJarFileSystem(inputServer, false))/*.get()*/.getPath("/");
 		outputFs = /*StitchUtil.*/getJarFileSystem(output, true);
 
 		entriesClient = new HashMap<>();
@@ -204,8 +204,8 @@ public class JarMerger implements AutoCloseable {
 
 	@Override
 	public void close() throws IOException {
-		//inputClientFs.close();
-		//inputServerFs.close();
+		inputClientFs.close();
+		inputServerFs.close();
 		outputFs.close();
 	}
 
