@@ -17,7 +17,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.DoubleConsumer;
-import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -39,6 +38,7 @@ import org.objectweb.asm.tree.InnerClassNode;
 import matcher.Matcher;
 import matcher.NameType;
 import matcher.Util;
+import matcher.bcremap.AsmRemapper;
 import matcher.config.Config;
 import matcher.gui.Gui;
 import matcher.type.ClassEnvironment;
@@ -52,6 +52,7 @@ import matcher.type.MethodVarInstance;
 import com.chocohead.merger.MergeStep;
 import com.chocohead.merger.QueuingIterator;
 import com.chocohead.merger.TripleClassEnvironment;
+import com.chocohead.merger.mappings.MappedUidRemapper;
 import com.chocohead.merger.mappings.TinyWriter;
 import com.chocohead.merger.pane.ArgoConfirmPane;
 import com.chocohead.merger.pane.ArgoPane;
@@ -295,8 +296,8 @@ public class MergedJaringMenu extends Menu {
 		serverOnly.sort(Comparator.comparing(ClassInstance::getName));
 		clientOnly.sort(Comparator.comparing(ClassInstance::getName));
 
-		Function<String, ClassInstance> serverNamer = serverFirst ? gui.getEnv()::getClsByNameA : gui.getEnv()::getClsByNameB;
-		Function<String, ClassInstance> clientNamer = serverFirst ? gui.getEnv()::getClsByNameB : gui.getEnv()::getClsByNameA;
+		AsmRemapper serverNamer = new MappedUidRemapper(serverFirst ? gui.getEnv().getEnvA() : gui.getEnv().getEnvB());
+		AsmRemapper clientNamer = new MappedUidRemapper(serverFirst ? gui.getEnv().getEnvB() : gui.getEnv().getEnvA());
 
 		double total = union.size() + serverOnly.size() + clientOnly.size();
 		int current = 1;
@@ -309,7 +310,7 @@ public class MergedJaringMenu extends Menu {
 				assert cls.getUid() >= 0: "Missed UID for " + cls;
 				assert Objects.equals(cls.getName(NameType.UID_PLAIN), cls.getMatch().getName(NameType.UID_PLAIN));
 				assert cls.hasMappedName() == cls.getMatch().hasMappedName();
-				writer.acceptClass(className = cls.getName(cls.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), cls.getName(NameType.PLAIN), cls.getMatch().getName(NameType.PLAIN));
+				writer.acceptClass(className = serverNamer.map(cls.getName()), cls.getName(NameType.PLAIN), cls.getMatch().getName(NameType.PLAIN));
 			} else {
 				className = cls.getName();
 			}
@@ -317,28 +318,28 @@ public class MergedJaringMenu extends Menu {
 			for (MethodInstance method : cls.getMethods()) {
 				if (method.isNameObfuscated()) {
 					assert method.getUid() >= 0 || method.getParents().stream().map(MethodInstance::getCls).anyMatch(serverFirst ? aSkipper : bSkipper): "Missed UID for " + method;
-					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), serverNamer),
+					writer.acceptMethod(className, serverNamer.mapMethodName(method.getOwner().getName(), method.getName(), method.getDesc()), serverNamer.mapMethodDesc(method.getDesc()),
 							method.getName(NameType.PLAIN), method.hasMatch() ? method.getMatch().getName(NameType.PLAIN) : null);
 				}
 			}
 			for (MethodInstance method : cls.getMatch().getMethods()) {
 				if (!method.hasMatch() && method.isNameObfuscated()) {
 					assert method.getUid() >= 0 || method.getParents().stream().map(MethodInstance::getCls).anyMatch(serverFirst ? bSkipper : aSkipper): "Missed UID for " + method + " (class matched to " + cls + ')';
-					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), clientNamer), null, method.getName(NameType.PLAIN));
+					writer.acceptMethod(className, clientNamer.mapMethodName(method.getOwner().getName(), method.getName(), method.getDesc()), clientNamer.mapMethodDesc(method.getDesc()), null, method.getName(NameType.PLAIN));
 				}
 			}
 
 			for (FieldInstance field : cls.getFields()) {
 				if (field.isNameObfuscated()) {
 					assert field.getUid() >= 0: "Missed UID for " + field;
-					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(field.getDesc(), serverNamer),
+					writer.acceptField(className, serverNamer.mapFieldName(field.getOwner().getName(), field.getName(), field.getDesc()), serverNamer.mapDesc(field.getDesc()),
 							field.getName(NameType.PLAIN), field.hasMatch() ? field.getMatch().getName(NameType.PLAIN) : null);
 				}
 			}
 			for (FieldInstance field : cls.getMatch().getFields()) {
 				if (!field.hasMatch() && field.isNameObfuscated()) {
 					assert field.getUid() >= 0: "Missed UID for " + field + " (class matched to " + cls + ')';
-					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(field.getDesc(), clientNamer), null, field.getName(NameType.PLAIN));
+					writer.acceptField(className, clientNamer.mapFieldName(field.getOwner().getName(), field.getName(), field.getDesc()), clientNamer.mapDesc(field.getDesc()), null, field.getName(NameType.PLAIN));
 				}
 			}
 
@@ -351,7 +352,7 @@ public class MergedJaringMenu extends Menu {
 			String className;
 			if (cls.isNameObfuscated()) {
 				assert cls.getUid() >= 0;
-				writer.acceptClass(className = cls.getName(cls.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), cls.getName(NameType.PLAIN), null);
+				writer.acceptClass(className = serverNamer.map(cls.getName()), cls.getName(NameType.PLAIN), null);
 			} else {
 				className = cls.getName();
 			}
@@ -359,14 +360,14 @@ public class MergedJaringMenu extends Menu {
 			for (MethodInstance method : cls.getMethods()) {
 				if (method.isNameObfuscated()) {
 					assert method.getUid() >= 0 || method.getParents().stream().map(MethodInstance::getCls).anyMatch(serverFirst ? aSkipper : bSkipper);
-					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), serverNamer), method.getName(NameType.PLAIN), null);
+					writer.acceptMethod(className, serverNamer.mapMethodName(method.getOwner().getName(), method.getName(), method.getDesc()), serverNamer.mapMethodDesc(method.getDesc()), method.getName(NameType.PLAIN), null);
 				}
 			}
 
 			for (FieldInstance field : cls.getFields()) {
 				if (field.isNameObfuscated()) {
 					assert field.getUid() >= 0;
-					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(field.getDesc(), serverNamer), field.getName(NameType.PLAIN), null);
+					writer.acceptField(className, serverNamer.mapFieldName(field.getOwner().getName(), field.getName(), field.getDesc()), serverNamer.mapDesc(field.getDesc()), field.getName(NameType.PLAIN), null);
 				}
 			}
 
@@ -379,7 +380,7 @@ public class MergedJaringMenu extends Menu {
 			String className;
 			if (cls.isNameObfuscated()) {
 				assert cls.getUid() >= 0;
-				writer.acceptClass(className = cls.getName(cls.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), null, cls.getName(NameType.PLAIN));
+				writer.acceptClass(className = clientNamer.map(cls.getName()), null, cls.getName(NameType.PLAIN));
 			} else {
 				className = cls.getName();
 			}
@@ -387,14 +388,14 @@ public class MergedJaringMenu extends Menu {
 			for (MethodInstance method : cls.getMethods()) {
 				if (method.isNameObfuscated()) {
 					assert method.getUid() >= 0 || method.getParents().stream().map(MethodInstance::getCls).anyMatch(serverFirst ? bSkipper : aSkipper);
-					writer.acceptMethod(className, method.getName(method.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(method.getDesc(), clientNamer), null, method.getName(NameType.PLAIN));
+					writer.acceptMethod(className, clientNamer.mapMethodName(method.getOwner().getName(), method.getName(), method.getDesc()), clientNamer.mapMethodDesc(method.getDesc()), null, method.getName(NameType.PLAIN));
 				}
 			}
 
 			for (FieldInstance field : cls.getFields()) {
 				if (field.isNameObfuscated()) {
 					assert field.getUid() >= 0;
-					writer.acceptField(className, field.getName(field.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN), remapDesc(field.getDesc(), clientNamer), null, field.getName(NameType.PLAIN));
+					writer.acceptField(className, clientNamer.mapFieldName(field.getOwner().getName(), field.getName(), field.getDesc()), clientNamer.mapDesc(field.getDesc()), null, field.getName(NameType.PLAIN));
 				}
 			}
 
@@ -402,21 +403,6 @@ public class MergedJaringMenu extends Menu {
 		}
 
 		Util.closeSilently(writer);
-	}
-
-	private static final Pattern CLASS_FINDER = Pattern.compile("L([^;]+);");
-	private static String remapDesc(String desc, Function<String, ClassInstance> classProducer) {
-		StringBuffer buf = new StringBuffer();
-
-		java.util.regex.Matcher matcher = CLASS_FINDER.matcher(desc);
-		while (matcher.find()) {
-			String type = matcher.group(1);
-			ClassInstance cls = classProducer.apply(type);
-			matcher.appendReplacement(buf, java.util.regex.Matcher.quoteReplacement('L' + (cls != null && cls.isNameObfuscated() ? cls.getName(cls.hasMappedName() ? NameType.MAPPED_PLAIN : NameType.UID_PLAIN) : type) + ';'));
-		}
-		matcher.appendTail(buf);
-
-		return buf.toString();
 	}
 
 	private static void clearGlue(Gui gui, DoubleConsumer progress) {

@@ -48,10 +48,15 @@ import java.util.stream.Collectors;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.ClassNode;
 
 import matcher.Matcher;
-import matcher.NameType;
+import matcher.Util;
+import matcher.bcremap.AsmClassRemapper;
+import matcher.bcremap.AsmRemapper;
 import matcher.type.ClassInstance;
+
+import com.chocohead.merger.mappings.MappedUidRemapper;
 
 public class JarMerger implements AutoCloseable {
 	public static abstract class Entry {
@@ -104,15 +109,19 @@ public class JarMerger implements AutoCloseable {
 			ClassInstance cls = classFactory.apply(name);
 
 			assert cls != null && cls.getUri() != null: "Unable to find valid class for " + name + " (produced " + cls + ')';
-			NameType nameType;
-			if (cls.hasMappedName()) {
-				nameType = NameType.MAPPED_PLAIN;
-			} else {
-				nameType = NameType.UID_PLAIN;
-			}
+			AsmRemapper remapper = new MappedUidRemapper(cls.getEnv());
 
-			String replacementPath = cls.getName(nameType).replace('.', '/') + ".class";
-			ClassEntry out = new ClassEntry(path.getFileSystem().getPath(replacementPath), metadata, visitor -> cls.accept(visitor, nameType));
+			String replacementPath = remapper.map(cls.getName()) + ".class";;
+			assert replacementPath.codePoints().filter(ch -> ch == '.').count() == 1;
+
+			ClassEntry out = new ClassEntry(path.getFileSystem().getPath(replacementPath), metadata, visitor -> {
+				ClassNode node = cls.getMergedAsmNode();
+				if (node == null) throw new IllegalArgumentException("Class without an ASM node: " + cls);
+
+				synchronized (Util.asmNodeSync) {
+					AsmClassRemapper.process(node, remapper, visitor);
+				}
+			});
 			if (entries != null) entries.put(replacementPath, out); //out.path doesn't actually exist, but we can just about get away with it
 			return out;
 		}
