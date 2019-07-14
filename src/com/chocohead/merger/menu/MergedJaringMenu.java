@@ -798,6 +798,8 @@ public class MergedJaringMenu extends Menu {
 		Map<ClassInstance, SystemComponent> fixedComponents = new IdentityHashMap<>();
 
 		Map<ClassInstance, Integer> anonymousPool = new IdentityHashMap<>();
+		Map<ClassInstance, Integer> anonymousMatched = new IdentityHashMap<>();
+
 		List<ClassSystem> systems = findSystems(startingClasses.stream().filter(cls -> !cls.hasMappedName()), gui.getEnv().getClassesA()::contains, progress);
 		for (ClassSystem system : systems) {
 			if (!system.isSimple()) {
@@ -838,7 +840,16 @@ public class MergedJaringMenu extends Menu {
 				assert outer != null; //It must have a constructor somewhere (aside from a few edge cases where they're stripped, but hopefully not for local classes)
 
 				enforceHierarchy(outer, component.root);
-				if (anonymous) component.root.setMappedName(anonymousPool.compute(outer, (key, last) -> last == null ? 1 : last + 1).toString());
+				if (anonymous) {
+					Integer id;
+					if (component.root.hasMatch() && anonymousMatched.containsKey(component.root.getMatch())) {
+						id = anonymousMatched.get(component.root.getMatch());
+					} else {
+						id = anonymousPool.compute(outer, (key, last) -> last == null ? 1 : last + 1);
+						if (component.root.hasMatch()) anonymousMatched.put(component.root, id);
+					}
+					component.root.setMappedName(id.toString());
+				}
 
 				fixedComponents.put(component.root, component);
 			}
